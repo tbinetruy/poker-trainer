@@ -60,6 +60,19 @@ def test_raise_reopens_action_and_enforces_turn_order() -> None:
         apply_action(state, seat_id=0, action="call")
 
 
+def test_short_all_in_raise_does_not_reopen_action() -> None:
+    state = create_hand(difficulty="beginner", seed="hand-short-all-in")
+    state["seats"][3]["stack"] = 150
+
+    state = apply_action(state, seat_id=3, action="raise", amount=150)
+    state = apply_action(state, seat_id=4, action="call")
+    state = apply_action(state, seat_id=0, action="call")
+    state = apply_action(state, seat_id=1, action="call")
+    state = apply_action(state, seat_id=2, action="call")
+
+    assert state["street"] == "flop"
+
+
 def test_showdown_picks_best_five_card_hand() -> None:
     state = create_hand(difficulty="beginner", seed="hand-5")
     state["street"] = "river"

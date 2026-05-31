@@ -97,10 +97,12 @@ def legal_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
     min_total = state["current_bet"] + state["min_raise"]
     max_total = seat["street_bet"] + seat["stack"]
     if max_total > state["current_bet"]:
+        can_make_full_raise = max_total >= min_total
         actions.append(
             {
                 "action": "raise",
-                "min_amount": min(min_total, max_total),
+                "full_raise": can_make_full_raise,
+                "min_amount": min_total if can_make_full_raise else max_total,
                 "max_amount": max_total,
             }
         )
@@ -145,9 +147,18 @@ def apply_action(
         target_total = _validated_amount(amount, available[action])
         paid = _commit_chips(seat, target_total - seat["street_bet"])
         next_state["current_bet"] = seat["street_bet"]
-        next_state["min_raise"] = next_state["current_bet"] - previous_bet
-        next_state["acted_seats"] = []
-        _record(next_state, seat_id, "raise", amount=paid, total=seat["street_bet"])
+        raise_size = next_state["current_bet"] - previous_bet
+        if available[action]["full_raise"]:
+            next_state["min_raise"] = raise_size
+            next_state["acted_seats"] = []
+        _record(
+            next_state,
+            seat_id,
+            "raise",
+            amount=paid,
+            total=seat["street_bet"],
+            full_raise=available[action]["full_raise"],
+        )
 
     if seat["stack"] == 0 and seat["status"] == "active":
         seat["status"] = "all_in"

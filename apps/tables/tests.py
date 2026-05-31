@@ -75,6 +75,21 @@ def test_game_action_endpoint_applies_hero_action() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_game_action_endpoint_rejects_non_hero_action() -> None:
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-action", kwargs={"game_id": game.id}),
+        data={"seat": 3, "action": "call"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only hero actions are accepted through this endpoint."
+
+
+@pytest.mark.django_db(transaction=True)
 def test_table_socket_sends_snapshot_for_existing_game() -> None:
     game = create_game_session(GameSession.Difficulty.BEGINNER)
 

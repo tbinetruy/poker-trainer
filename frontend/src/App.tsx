@@ -63,7 +63,7 @@ function App() {
               <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
                 <Spade className="h-5 w-5" />
               </span>
-              <Badge variant="secondary">Milestone 1</Badge>
+              <Badge variant="secondary">Milestone 2</Badge>
             </div>
             <h1 className="text-3xl font-semibold tracking-normal md:text-4xl">Poker Trainer</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
