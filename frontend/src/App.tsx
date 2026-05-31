@@ -1,8 +1,8 @@
 import { Bot, Brain, Radio, Spade, Users } from "lucide-react"
 import { useState } from "react"
 
-import { createGame } from "@/lib/api"
-import type { Difficulty, GameSession } from "@/lib/types"
+import { applyGameAction, createGame } from "@/lib/api"
+import type { Difficulty, GameSession, LegalAction } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,6 +17,7 @@ function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>("beginner")
   const [game, setGame] = useState<GameSession | null>(null)
   const [isStarting, setIsStarting] = useState(false)
+  const [isActing, setIsActing] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
 
   const startGame = async () => {
@@ -28,6 +29,28 @@ function App() {
       setStartError(error instanceof Error ? error.message : "Failed to start game.")
     } finally {
       setIsStarting(false)
+    }
+  }
+
+  const submitAction = async (legalAction: LegalAction) => {
+    if (!game) {
+      return
+    }
+
+    setIsActing(true)
+    setStartError(null)
+    try {
+      const amount =
+        "amount" in legalAction
+          ? legalAction.amount
+          : "min_amount" in legalAction
+            ? legalAction.min_amount
+            : undefined
+      setGame(await applyGameAction(game.id, { seat: 0, action: legalAction.action, amount }))
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : "Failed to apply action.")
+    } finally {
+      setIsActing(false)
     }
   }
 
@@ -108,7 +131,11 @@ function App() {
               <div>
                 <h2 className="text-lg font-semibold">Table</h2>
                 <p className="text-sm text-muted-foreground">
-                  {game ? `Game ${game.id}` : "Start a game to create a table session."}
+                  {game
+                    ? `${game.table_state.street} · to act: ${
+                        game.table_state.to_act ?? "none"
+                      } · Game ${game.id}`
+                    : "Start a game to create a table session."}
                 </p>
               </div>
               <Badge>{game?.status ?? "idle"}</Badge>
@@ -138,14 +165,63 @@ function App() {
                 <div className="absolute left-1/2 top-1/2 w-44 -translate-x-1/2 -translate-y-1/2 rounded-md border border-white/15 bg-black/25 p-4 text-center">
                   <div className="text-xs uppercase text-white/60">Pot</div>
                   <div className="text-2xl font-semibold">{game?.table_state.pot ?? 0}</div>
+                  <div className="mt-3 flex justify-center gap-1">
+                    {(game?.table_state.community_cards ?? []).map((card) => (
+                      <span className="rounded bg-white px-1.5 py-1 text-xs font-semibold text-slate-950" key={card}>
+                        {card}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
+
+            {game ? (
+              <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">Hero</span>
+                  {game.table_state.seats[0].hole_cards.map((card) => (
+                    <span className="rounded-md border bg-background px-2 py-1 font-semibold" key={card}>
+                      {card}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {game.table_state.to_act === 0 ? (
+                    game.table_state.legal_actions.map((legalAction) => (
+                      <Button
+                        disabled={isActing}
+                        key={legalAction.action}
+                        onClick={() => submitAction(legalAction)}
+                        size="sm"
+                        variant={legalAction.action === "fold" ? "outline" : "default"}
+                      >
+                        {actionLabel(legalAction)}
+                      </Button>
+                    ))
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      Waiting for simulator/bot action.
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </section>
         </section>
       </div>
     </main>
   )
+}
+
+function actionLabel(action: LegalAction) {
+  if ("amount" in action) {
+    return `${action.action} ${action.amount}`
+  }
+  if ("min_amount" in action) {
+    return `${action.action} ${action.min_amount}`
+  }
+  return action.action
 }
 
 function seatPosition(seat: number) {

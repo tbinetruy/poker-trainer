@@ -18,3 +18,21 @@ export async function createGame(difficulty: Difficulty): Promise<GameSession> {
   return response.json()
 }
 
+export async function applyGameAction(
+  gameId: string,
+  payload: { seat: number; action: string; amount?: number },
+): Promise<GameSession> {
+  const response = await fetch(`${API_BASE_URL}/api/games/${gameId}/actions/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to apply action: ${response.status}`)
+  }
+
+  return response.json()
+}

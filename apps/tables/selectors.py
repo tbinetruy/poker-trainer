@@ -1,5 +1,6 @@
 from django.shortcuts import get_object_or_404
 
+from apps.poker_engine import visible_state
 from apps.tables.models import GameSession
 
 
@@ -8,7 +9,7 @@ def serialize_game(game: GameSession) -> dict:
         "id": str(game.id),
         "difficulty": game.difficulty,
         "status": game.status,
-        "table_state": game.table_state,
+        "table_state": visible_state(game.table_state),
         "created_at": game.created_at.isoformat(),
         "updated_at": game.updated_at.isoformat(),
     }
