@@ -193,3 +193,26 @@ def test_random_bot_is_deterministic_for_same_state() -> None:
     second = STRATEGIES["random"].choose_action(state, 3)
 
     assert first == second
+
+
+def test_bot_sizing_uses_live_committed_pot() -> None:
+    from apps.poker_engine.bots import STRATEGIES
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="live-pot-sizing"),
+        "advanced",
+    )
+    state["street"] = "flop"
+    state["current_bet"] = 0
+    state["pot"] = 0
+    state["to_act"] = 1
+    state["acted_seats"] = []
+    state["community_cards"] = ["2c", "7d", "Jh"]
+    state["seats"][1]["hole_cards"] = ["As", "Ah"]
+    for seat in state["seats"]:
+        seat["street_bet"] = 0
+        seat["committed"] = 200
+
+    decision = STRATEGIES["pro"].choose_action(state, 1)
+
+    assert decision == {"action": "bet", "amount": 750}

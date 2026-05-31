@@ -155,9 +155,13 @@ def _hole_score(state: dict, seat_id: int) -> int:
 def _sized_amount(action: dict, state: dict, pot_fraction: float) -> int:
     desired = max(
         action["min_amount"],
-        int(max(state["pot"], state["stakes"]["big_blind"]) * pot_fraction),
+        int(max(_live_pot(state), state["stakes"]["big_blind"]) * pot_fraction),
     )
     return min(action["max_amount"], desired)
+
+
+def _live_pot(state: dict) -> int:
+    return sum(seat["committed"] for seat in state["seats"])
 
 
 def _bot_rng(state: dict, seat_id: int) -> random.Random:
