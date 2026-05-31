@@ -1,6 +1,11 @@
 import pytest
 
 from apps.poker_engine import apply_action, create_hand, legal_actions, visible_state
+from apps.poker_engine.bots import (
+    BOT_PERSONALITY_POOLS,
+    advance_bots_until_human_turn,
+    assign_bot_personalities,
+)
 from apps.poker_engine.engine import InvalidAction, _showdown
 from apps.poker_engine.evaluator import evaluate_seven
 
@@ -98,12 +103,14 @@ def test_showdown_picks_best_five_card_hand() -> None:
 
 
 def test_visible_state_hides_unrevealed_opponent_hole_cards() -> None:
-    state = create_hand(difficulty="beginner", seed="hand-6")
+    state = assign_bot_personalities(create_hand(difficulty="beginner", seed="hand-6"), "beginner")
 
     public = visible_state(state)
 
     assert len(public["seats"][0]["hole_cards"]) == 2
     assert public["seats"][1]["hole_cards"] == []
+    assert "personality" not in public["seats"][1]
+    assert "bot_personality_pool" not in public
     assert "deck" not in public
     assert "seed" not in public
 
@@ -134,3 +141,55 @@ def test_showdown_distributes_side_pots() -> None:
     assert state["winners"] == [{"seat": 0, "amount": 300}, {"seat": 1, "amount": 200}]
     assert state["seats"][0]["stack"] == 300
     assert state["seats"][1]["stack"] == 200
+
+
+def test_difficulty_presets_assign_private_personalities() -> None:
+    beginner = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="beginner-bots"),
+        "beginner",
+    )
+    medium = assign_bot_personalities(
+        create_hand(difficulty="medium", seed="medium-bots"),
+        "medium",
+    )
+    advanced = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="advanced-bots"),
+        "advanced",
+    )
+
+    assert [seat["personality"] for seat in beginner["seats"][1:]] == BOT_PERSONALITY_POOLS[
+        "beginner"
+    ]
+    assert [seat["personality"] for seat in medium["seats"][1:]] == BOT_PERSONALITY_POOLS["medium"]
+    assert [seat["personality"] for seat in advanced["seats"][1:]] == BOT_PERSONALITY_POOLS[
+        "advanced"
+    ]
+    assert "pro" not in [seat["personality"] for seat in beginner["seats"][1:]]
+    assert "pro" in [seat["personality"] for seat in medium["seats"][1:]]
+
+
+def test_bots_auto_advance_until_hero_turn() -> None:
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="auto-advance"),
+        "beginner",
+    )
+
+    state = advance_bots_until_human_turn(state)
+
+    assert state["to_act"] == 0
+    assert state["status"] == "active"
+    assert [event["seat"] for event in state["hand_history"][-2:]] == [3, 4]
+
+
+def test_random_bot_is_deterministic_for_same_state() -> None:
+    from apps.poker_engine.bots import STRATEGIES
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="random-bot"),
+        "beginner",
+    )
+
+    first = STRATEGIES["random"].choose_action(state, 3)
+    second = STRATEGIES["random"].choose_action(state, 3)
+
+    assert first == second

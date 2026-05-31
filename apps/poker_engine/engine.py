@@ -177,8 +177,10 @@ def visible_state(state: dict[str, Any], *, hero_seat: int = 0) -> dict[str, Any
     visible.pop("deck", None)
     visible.pop("seed", None)
     visible.pop("acted_seats", None)
+    visible.pop("bot_personality_pool", None)
 
     for seat in visible["seats"]:
+        seat.pop("personality", None)
         if seat["seat"] == hero_seat:
             continue
         if visible["status"] != "complete" or seat["status"] == "folded":

@@ -15,14 +15,21 @@ pytestmark = pytest.mark.django_db
 
 
 def test_create_game_session_builds_initial_table_state() -> None:
-    game = create_game_session(GameSession.Difficulty.MEDIUM)
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
 
-    assert game.difficulty == GameSession.Difficulty.MEDIUM
+    assert game.difficulty == GameSession.Difficulty.BEGINNER
     assert game.status == GameSession.Status.ACTIVE
     assert game.table_state["variant"] == "no_limit_holdem"
     assert game.table_state["street"] == "preflop"
-    assert game.table_state["pot"] == 150
+    assert game.table_state["pot"] >= 250
+    assert game.table_state["to_act"] == 0
     assert len(game.table_state["seats"]) == 5
+    assert [seat["personality"] for seat in game.table_state["seats"][1:]] == [
+        "fish",
+        "fish",
+        "fish",
+        "tight",
+    ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -30,14 +37,16 @@ def test_create_game_endpoint_returns_session() -> None:
     client = AsyncClient()
     response = async_to_sync(client.post)(
         reverse("game-list"),
-        data={"difficulty": "advanced"},
+        data={"difficulty": "beginner"},
         content_type="application/json",
     )
 
     assert response.status_code == 201
-    assert response.json()["difficulty"] == "advanced"
+    assert response.json()["difficulty"] == "beginner"
     assert response.json()["status"] == "active"
+    assert response.json()["table_state"]["to_act"] == 0
     assert response.json()["table_state"]["seats"][1]["hole_cards"] == []
+    assert "personality" not in response.json()["table_state"]["seats"][1]
     assert GameSession.objects.count() == 1
 
 
@@ -58,8 +67,6 @@ def test_create_game_endpoint_rejects_malformed_json() -> None:
 @pytest.mark.django_db(transaction=True)
 def test_game_action_endpoint_applies_hero_action() -> None:
     game = create_game_session(GameSession.Difficulty.BEGINNER)
-    game.table_state = apply_until_hero_can_call(game.table_state)
-    game.save(update_fields=["table_state"])
 
     client = AsyncClient()
     response = async_to_sync(client.post)(
@@ -71,7 +78,8 @@ def test_game_action_endpoint_applies_hero_action() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["table_state"]["seats"][0]["stack"] == 9_900
-    assert payload["table_state"]["to_act"] == 1
+    assert payload["table_state"]["street"] == "flop"
+    assert payload["table_state"]["to_act"] == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -107,13 +115,6 @@ def test_table_socket_sends_snapshot_for_existing_game() -> None:
         await communicator.disconnect()
 
     async_to_sync(run_test)()
-
-
-def apply_until_hero_can_call(state: dict) -> dict:
-    from apps.poker_engine import apply_action
-
-    state = apply_action(state, seat_id=3, action="call")
-    return apply_action(state, seat_id=4, action="call")
 
 
 @pytest.mark.django_db(transaction=True)

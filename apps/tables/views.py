@@ -6,6 +6,7 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from apps.poker_engine import apply_action
+from apps.poker_engine.bots import advance_bots_until_human_turn
 from apps.poker_engine.engine import InvalidAction
 from apps.tables.models import GameSession
 from apps.tables.selectors import serialize_game
@@ -88,6 +89,7 @@ async def game_action(request: HttpRequest, game_id) -> JsonResponse:
                 action=str(payload.get("action", "")),
                 amount=amount,
             )
+            game.table_state = advance_bots_until_human_turn(game.table_state)
         except (InvalidAction, TypeError, ValueError) as error:
             return JsonResponse({"detail": str(error)}, status=400)
 
