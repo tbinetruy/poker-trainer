@@ -1,0 +1,42 @@
+import json
+
+from django.http import HttpRequest, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from apps.tables.models import GameSession
+from apps.tables.selectors import serialize_game
+from apps.tables.services import build_initial_table_state
+
+
+async def health(request: HttpRequest) -> JsonResponse:
+    return JsonResponse({"status": "ok"})
+
+
+@csrf_exempt
+async def create_game(request: HttpRequest) -> JsonResponse:
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    payload = json.loads(request.body or b"{}")
+    difficulty = payload.get("difficulty", GameSession.Difficulty.BEGINNER)
+    if difficulty not in GameSession.Difficulty.values:
+        difficulty = GameSession.Difficulty.BEGINNER
+
+    game = await GameSession.objects.acreate(
+        difficulty=difficulty,
+        status=GameSession.Status.WAITING,
+        table_state=build_initial_table_state(difficulty),
+    )
+    return JsonResponse(serialize_game(game), status=201)
+
+
+async def game_detail(request: HttpRequest, game_id) -> JsonResponse:
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    try:
+        game = await GameSession.objects.aget(id=game_id)
+    except GameSession.DoesNotExist:
+        return JsonResponse({"detail": "Not found."}, status=404)
+
+    return JsonResponse(serialize_game(game))
