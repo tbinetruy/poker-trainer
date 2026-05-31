@@ -9,13 +9,18 @@ class TableConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self) -> None:
         self.game_id = self.scope["url_route"]["kwargs"]["game_id"]
         self.group_name = f"table-{self.game_id}"
+        snapshot = await get_game_snapshot_async(self.game_id)
+
+        if snapshot is None:
+            await self.close(code=4404)
+            return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
         await self.send_json(
             {
                 "type": "table.snapshot",
-                "payload": await get_game_snapshot_async(self.game_id),
+                "payload": snapshot,
             }
         )
 
@@ -39,4 +44,3 @@ class TableConsumer(AsyncJsonWebsocketConsumer):
 
     async def decode_json(self, text_data: str) -> dict:
         return json.loads(text_data)
-

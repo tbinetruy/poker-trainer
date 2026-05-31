@@ -17,7 +17,14 @@ async def create_game(request: HttpRequest) -> JsonResponse:
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
 
-    payload = json.loads(request.body or b"{}")
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Malformed JSON."}, status=400)
+
+    if not isinstance(payload, dict):
+        return JsonResponse({"detail": "JSON body must be an object."}, status=400)
+
     difficulty = payload.get("difficulty", GameSession.Difficulty.BEGINNER)
     if difficulty not in GameSession.Difficulty.values:
         difficulty = GameSession.Difficulty.BEGINNER

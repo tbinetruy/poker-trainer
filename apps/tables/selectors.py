@@ -1,4 +1,3 @@
-from asgiref.sync import sync_to_async
 from django.shortcuts import get_object_or_404
 
 from apps.tables.models import GameSession
@@ -20,5 +19,10 @@ def get_game_snapshot(game_id: str) -> dict:
     return serialize_game(game)
 
 
-get_game_snapshot_async = sync_to_async(get_game_snapshot, thread_sensitive=True)
+async def get_game_snapshot_async(game_id: str) -> dict | None:
+    try:
+        game = await GameSession.objects.aget(id=game_id)
+    except GameSession.DoesNotExist:
+        return None
 
+    return serialize_game(game)

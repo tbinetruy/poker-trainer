@@ -17,11 +17,15 @@ function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>("beginner")
   const [game, setGame] = useState<GameSession | null>(null)
   const [isStarting, setIsStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
 
   const startGame = async () => {
     setIsStarting(true)
+    setStartError(null)
     try {
       setGame(await createGame(difficulty))
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : "Failed to start game.")
     } finally {
       setIsStarting(false)
     }
@@ -48,6 +52,12 @@ function App() {
             {isStarting ? "Starting..." : "Start game"}
           </Button>
         </header>
+
+        {startError ? (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            {startError}
+          </div>
+        ) : null}
 
         <section className="grid gap-4 lg:grid-cols-[320px_1fr]">
           <aside className="space-y-4">
@@ -151,4 +161,3 @@ function seatPosition(seat: number) {
 }
 
 export default App
-
