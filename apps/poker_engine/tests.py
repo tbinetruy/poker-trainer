@@ -144,6 +144,22 @@ def test_visible_state_hides_unrevealed_opponent_hole_cards() -> None:
     assert "seed" not in public
 
 
+def test_visible_state_hides_opponent_hole_cards_after_completion() -> None:
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="completed-public-state"),
+        "beginner",
+    )
+    state["status"] = "complete"
+    state["street"] = "showdown"
+    state["private_review_revealed"] = True
+
+    public = visible_state(state)
+
+    assert len(public["seats"][0]["hole_cards"]) == 2
+    assert public["seats"][1]["hole_cards"] == []
+    assert "private_review_revealed" not in public
+
+
 def test_evaluator_handles_wheel_straight() -> None:
     rank = evaluate_seven(["As", "2d", "3c", "4h", "5s", "9c", "Td"])
 
@@ -279,6 +295,24 @@ def test_hero_advice_context_only_reveals_hero_private_information() -> None:
     assert "deck" not in context
     assert "seed" not in context
     assert "personality" not in context["table"]["seats"][1]
+
+
+def test_hero_advice_context_can_include_post_game_private_review() -> None:
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="coach-review-context"),
+        "advanced",
+    )
+    state["status"] = "complete"
+    state["street"] = "showdown"
+    state["to_act"] = None
+
+    context = build_hero_advice_context(state, hero_seat=0, include_private_review=True)
+
+    assert context["table"]["seats"][1]["hole_cards"] == []
+    assert context["private_review"]["seats"][1]["hole_cards"] == state["seats"][1]["hole_cards"]
+    assert context["private_review"]["seats"][1]["personality"] == state["seats"][1]["personality"]
+    assert "deck" not in context
+    assert "seed" not in context
 
 
 def test_validate_llm_decision_rejects_illegal_amount() -> None:

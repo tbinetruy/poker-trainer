@@ -1,4 +1,4 @@
-import type { Difficulty, GameSession } from "@/lib/types"
+import type { Difficulty, GameReview, GameSession } from "@/lib/types"
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
 
@@ -37,13 +37,32 @@ export async function applyGameAction(
   return response.json()
 }
 
-export async function askCoach(gameId: string, question: string): Promise<{ answer: string }> {
+export async function getGameReview(gameId: string): Promise<GameReview> {
+  const response = await fetch(`${API_BASE_URL}/api/games/${gameId}/review/`, {
+    method: "POST",
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to reveal hand: ${await responseErrorDetail(response)}`)
+  }
+
+  return response.json()
+}
+
+export async function askCoach(
+  gameId: string,
+  question: string,
+  options: { includePrivateReview?: boolean } = {},
+): Promise<{ answer: string }> {
   const response = await fetch(`${API_BASE_URL}/api/games/${gameId}/advice/`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({
+      question,
+      include_private_review: options.includePrivateReview ?? false,
+    }),
   })
 
   if (!response.ok) {

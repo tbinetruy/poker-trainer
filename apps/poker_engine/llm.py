@@ -51,6 +51,7 @@ class PokerLLMProvider(Protocol):
         *,
         question: str,
         hero_seat: int = 0,
+        include_private_review: bool = False,
     ) -> str:
         pass
 
@@ -129,6 +130,7 @@ class OpenAIResponsesPokerProvider:
         *,
         question: str,
         hero_seat: int = 0,
+        include_private_review: bool = False,
     ) -> str:
         try:
             import httpx
@@ -145,8 +147,10 @@ class OpenAIResponsesPokerProvider:
                             "type": "input_text",
                             "text": (
                                 "You are a poker coach helping Hero make range-based decisions. "
-                                "Use only the provided hero-visible context. Do not claim to know "
-                                "hidden opponent cards, deck order, or private bot personalities."
+                                "During active hands, use only the provided hero-visible context. "
+                                "If private_review is present, treat it as post-game information "
+                                "that Hero explicitly revealed after the hand ended. Do not claim "
+                                "to know deck order or future cards."
                             ),
                         }
                     ],
@@ -159,7 +163,11 @@ class OpenAIResponsesPokerProvider:
                             "text": json.dumps(
                                 {
                                     "question": question,
-                                    "context": build_hero_advice_context(state, hero_seat),
+                                    "context": build_hero_advice_context(
+                                        state,
+                                        hero_seat,
+                                        include_private_review=include_private_review,
+                                    ),
                                 },
                                 separators=(",", ":"),
                             ),
@@ -246,16 +254,23 @@ class CodexCLIPokerProvider:
         *,
         question: str,
         hero_seat: int = 0,
+        include_private_review: bool = False,
     ) -> str:
+        context = build_hero_advice_context(
+            state,
+            hero_seat,
+            include_private_review=include_private_review,
+        )
         prompt = (
             "You are a poker coach helping Hero study no-limit Texas Hold'em.\n"
-            "Use only the hero-visible JSON context. Do not claim to know hidden opponent cards, "
-            "deck order, or private bot personalities. Discuss ranges, pot odds, bet sizing, "
-            "position, and opponent tendencies inferred from public actions.\n"
+            "During active hands, use only the hero-visible JSON context. If private_review is "
+            "present, treat it as post-game information Hero explicitly revealed after the hand "
+            "ended. Do not claim to know deck order or future cards. Discuss ranges, pot odds, "
+            "bet sizing, position, and opponent tendencies.\n"
             "Keep the answer concise and actionable.\n"
             f"Hero question: {question}\n"
-            "Hero-visible context:\n"
-            f"{json.dumps(build_hero_advice_context(state, hero_seat), separators=(',', ':'))}"
+            "Poker context:\n"
+            f"{json.dumps(context, separators=(',', ':'))}"
         )
         return await self._run_codex_text(prompt)
 
@@ -345,9 +360,14 @@ def build_llm_decision_context(state: dict[str, Any], seat_id: int) -> dict[str,
     }
 
 
-def build_hero_advice_context(state: dict[str, Any], hero_seat: int = 0) -> dict[str, Any]:
+def build_hero_advice_context(
+    state: dict[str, Any],
+    hero_seat: int = 0,
+    *,
+    include_private_review: bool = False,
+) -> dict[str, Any]:
     hero = state["seats"][hero_seat]
-    return {
+    context = {
         "game": {
             "variant": state["variant"],
             "street": state["street"],
@@ -381,6 +401,12 @@ def build_hero_advice_context(state: dict[str, Any], hero_seat: int = 0) -> dict
         "hand_history": list(state["hand_history"]),
         "winners": list(state.get("winners", [])),
     }
+    if include_private_review and state["status"] == "complete":
+        context["private_review"] = {
+            "note": "Post-game privileged review data explicitly revealed to Hero.",
+            "seats": [_private_review_seat_for_llm(seat) for seat in state["seats"]],
+        }
+    return context
 
 
 def validate_llm_decision(
@@ -459,6 +485,15 @@ def _visible_seat_for_llm(seat: dict[str, Any], *, reveal_hole_cards: bool) -> d
         "committed": seat["committed"],
         "street_bet": seat["street_bet"],
         "hole_cards": list(seat["hole_cards"]) if reveal_hole_cards else [],
+    }
+
+
+def _private_review_seat_for_llm(seat: dict[str, Any]) -> dict[str, Any]:
+    personality = seat.get("personality")
+    return {
+        **_visible_seat_for_llm(seat, reveal_hole_cards=True),
+        "personality": personality,
+        "personality_brief": PERSONALITY_PROMPTS.get(personality) if personality else None,
     }
 
 

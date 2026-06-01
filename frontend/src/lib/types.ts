@@ -51,3 +51,19 @@ export type GameSession = {
   created_at: string
   updated_at: string
 }
+
+export type GameReview = {
+  game_id: string
+  status: "active" | "complete"
+  table: {
+    community_cards: string[]
+    button_seat: number
+    winners: Array<{ seat: number; amount: number }>
+  }
+  seats: Array<
+    Seat & {
+      personality: string | null
+      personality_brief: string | null
+    }
+  >
+}

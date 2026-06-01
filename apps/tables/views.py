@@ -12,7 +12,7 @@ from apps.poker_engine.engine import InvalidAction
 from apps.poker_engine.llm import LLMProviderUnavailable
 from apps.tables.llm import get_default_llm_provider
 from apps.tables.models import GameSession
-from apps.tables.selectors import serialize_game
+from apps.tables.selectors import serialize_game, serialize_game_review
 from apps.tables.services import build_initial_table_state_async
 
 _ACTION_LOCKS: dict[str, Lock] = {}
@@ -136,6 +136,29 @@ async def game_action(request: HttpRequest, game_id) -> JsonResponse:
 
 
 @csrf_exempt
+async def game_review(request: HttpRequest, game_id) -> JsonResponse:
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    lock = _ACTION_LOCKS.setdefault(str(game_id), Lock())
+    async with lock:
+        try:
+            game = await GameSession.objects.aget(id=game_id)
+        except GameSession.DoesNotExist:
+            return JsonResponse({"detail": "Not found."}, status=404)
+
+        if game.table_state.get("status") != "complete":
+            return JsonResponse(
+                {"detail": "Review is available after the hand is complete."}, status=409
+            )
+
+        game.table_state["private_review_revealed"] = True
+        await game.asave(update_fields=["table_state", "updated_at"])
+
+    return JsonResponse(serialize_game_review(game))
+
+
+@csrf_exempt
 async def game_advice(request: HttpRequest, game_id) -> JsonResponse:
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
@@ -153,18 +176,36 @@ async def game_advice(request: HttpRequest, game_id) -> JsonResponse:
         return JsonResponse({"detail": "Question is required."}, status=400)
     if len(question) > 1_000:
         return JsonResponse({"detail": "Question is too long."}, status=400)
+    include_private_review = bool(
+        payload.get("include_private_review") or payload.get("includePrivateReview")
+    )
 
     try:
         game = await GameSession.objects.aget(id=game_id)
     except GameSession.DoesNotExist:
         return JsonResponse({"detail": "Not found."}, status=404)
 
+    if include_private_review:
+        if game.table_state.get("status") != "complete":
+            return JsonResponse(
+                {"detail": "Private review is available after the hand is complete."}, status=409
+            )
+        if not game.table_state.get("private_review_revealed"):
+            return JsonResponse(
+                {"detail": "Private review must be revealed before asking the coach."}, status=409
+            )
+
     provider = get_default_llm_provider()
     if provider is None:
         return JsonResponse({"detail": "AI coach is not configured."}, status=503)
 
     try:
-        answer = await provider.advise_hero(game.table_state, question=question, hero_seat=0)
+        answer = await provider.advise_hero(
+            game.table_state,
+            question=question,
+            hero_seat=0,
+            include_private_review=include_private_review,
+        )
     except LLMProviderUnavailable as error:
         return JsonResponse({"detail": str(error)}, status=503)
 

@@ -167,9 +167,10 @@ def test_game_action_endpoint_rejects_non_hero_action() -> None:
 @pytest.mark.django_db(transaction=True)
 def test_game_advice_endpoint_returns_coach_answer(monkeypatch) -> None:
     class Provider:
-        async def advise_hero(self, state, *, question, hero_seat=0):
+        async def advise_hero(self, state, *, question, hero_seat=0, include_private_review=False):
             assert question == "What should I do?"
             assert state["seats"][hero_seat]["role"] == "human"
+            assert include_private_review is False
             return "Call is reasonable, but raising applies pressure."
 
     game = create_game_session(GameSession.Difficulty.BEGINNER)
@@ -183,6 +184,106 @@ def test_game_advice_endpoint_returns_coach_answer(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"answer": "Call is reasonable, but raising applies pressure."}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_game_review_endpoint_reveals_private_completed_hand_data() -> None:
+    game = create_game_session(GameSession.Difficulty.MEDIUM)
+    game.table_state["status"] = "complete"
+    game.table_state["street"] = "showdown"
+    game.status = GameSession.Status.COMPLETE
+    game.save(update_fields=["status", "table_state", "updated_at"])
+
+    client = AsyncClient()
+    response = async_to_sync(client.post)(reverse("game-review", kwargs={"game_id": game.id}))
+
+    assert response.status_code == 200
+    game.refresh_from_db()
+    payload = response.json()
+    assert payload["game_id"] == str(game.id)
+    assert payload["seats"][1]["hole_cards"] == game.table_state["seats"][1]["hole_cards"]
+    assert payload["seats"][1]["personality"] == game.table_state["seats"][1]["personality"]
+    assert payload["seats"][1]["personality_brief"]
+    assert game.table_state["private_review_revealed"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_game_review_endpoint_is_only_available_after_completion() -> None:
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+
+    client = AsyncClient()
+    response = async_to_sync(client.post)(reverse("game-review", kwargs={"game_id": game.id}))
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Review is available after the hand is complete."
+
+
+@pytest.mark.django_db(transaction=True)
+def test_game_advice_endpoint_can_include_private_review_after_completion(monkeypatch) -> None:
+    class Provider:
+        async def advise_hero(self, state, *, question, hero_seat=0, include_private_review=False):
+            assert question == "What did Villain 1 have?"
+            assert include_private_review is True
+            return "Villain 1 had the revealed hand and a private bot personality."
+
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+    game.table_state["status"] = "complete"
+    game.table_state["street"] = "showdown"
+    game.table_state["private_review_revealed"] = True
+    game.status = GameSession.Status.COMPLETE
+    game.save(update_fields=["status", "table_state", "updated_at"])
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: Provider())
+
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-advice", kwargs={"game_id": game.id}),
+        data={"question": "What did Villain 1 have?", "include_private_review": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["answer"]
+        == "Villain 1 had the revealed hand and a private bot personality."
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_game_advice_endpoint_rejects_private_review_during_active_hand() -> None:
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-advice", kwargs={"game_id": game.id}),
+        data={"question": "What do they have?", "include_private_review": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Private review is available after the hand is complete."
+
+
+@pytest.mark.django_db(transaction=True)
+def test_game_advice_endpoint_requires_reveal_before_private_review(monkeypatch) -> None:
+    class Provider:
+        async def advise_hero(self, state, *, question, hero_seat=0, include_private_review=False):
+            raise AssertionError("Provider should not be called before reveal.")
+
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+    game.table_state["status"] = "complete"
+    game.table_state["street"] = "showdown"
+    game.status = GameSession.Status.COMPLETE
+    game.save(update_fields=["status", "table_state", "updated_at"])
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: Provider())
+
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-advice", kwargs={"game_id": game.id}),
+        data={"question": "What did they have?", "include_private_review": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Private review must be revealed before asking the coach."
 
 
 @pytest.mark.django_db(transaction=True)

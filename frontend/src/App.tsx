@@ -1,8 +1,8 @@
-import { Bot, Brain, Radio, Spade, ToggleRight, Users } from "lucide-react"
+import { Bot, Brain, Eye, Radio, Spade, ToggleRight, Users } from "lucide-react"
 import { useState } from "react"
 
-import { applyGameAction, askCoach, createGame } from "@/lib/api"
-import type { Difficulty, GameSession, LegalAction } from "@/lib/types"
+import { applyGameAction, askCoach, createGame, getGameReview } from "@/lib/api"
+import type { Difficulty, GameReview, GameSession, LegalAction } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,16 +13,24 @@ const difficulties: Array<{ value: Difficulty; label: string; detail: string }> 
   { value: "advanced", label: "Advanced", detail: "Tougher table, fewer obvious leaks" },
 ]
 
+type CoachMessage = {
+  gameId: string
+  role: "hero" | "coach"
+  text: string
+}
+
 function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>("beginner")
   const [llmBots, setLlmBots] = useState(false)
   const [game, setGame] = useState<GameSession | null>(null)
+  const [gameReview, setGameReview] = useState<GameReview | null>(null)
   const [actionAmounts, setActionAmounts] = useState<Record<string, number>>({})
-  const [coachMessages, setCoachMessages] = useState<Array<{ role: "hero" | "coach"; text: string }>>([])
+  const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([])
   const [coachQuestion, setCoachQuestion] = useState("")
   const [isStarting, setIsStarting] = useState(false)
   const [isActing, setIsActing] = useState(false)
   const [isAskingCoach, setIsAskingCoach] = useState(false)
+  const [isRevealingReview, setIsRevealingReview] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
 
   const startGame = async () => {
@@ -31,6 +39,7 @@ function App() {
     try {
       const nextGame = await createGame(difficulty, llmBots)
       setGame(nextGame)
+      setGameReview(null)
       setCoachMessages([])
       setCoachQuestion("")
     } catch (error) {
@@ -55,7 +64,15 @@ function App() {
           : "min_amount" in legalAction
             ? legalAction.min_amount
             : undefined)
-      setGame(await applyGameAction(game.id, { seat: 0, action: legalAction.action, amount }))
+      const nextGame = await applyGameAction(game.id, {
+        seat: 0,
+        action: legalAction.action,
+        amount,
+      })
+      setGame(nextGame)
+      if (nextGame.table_state.status !== "complete") {
+        setGameReview(null)
+      }
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to apply action.")
     } finally {
@@ -68,20 +85,46 @@ function App() {
       return
     }
 
+    const gameId = game.id
     const question = coachQuestion.trim()
     setCoachQuestion("")
-    setCoachMessages((messages) => [...messages, { role: "hero", text: question }])
+    setCoachMessages((messages) => [...messages, { gameId, role: "hero", text: question }])
     setIsAskingCoach(true)
     setStartError(null)
     try {
-      const response = await askCoach(game.id, question)
-      setCoachMessages((messages) => [...messages, { role: "coach", text: response.answer }])
+      const response = await askCoach(gameId, question, {
+        includePrivateReview: gameReview?.game_id === gameId,
+      })
+      setCoachMessages((messages) => [
+        ...messages,
+        { gameId, role: "coach", text: response.answer },
+      ])
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to ask coach.")
     } finally {
       setIsAskingCoach(false)
     }
   }
+
+  const revealGameReview = async () => {
+    if (!game || game.table_state.status !== "complete") {
+      return
+    }
+
+    setIsRevealingReview(true)
+    setStartError(null)
+    try {
+      setGameReview(await getGameReview(game.id))
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : "Failed to reveal hand.")
+    } finally {
+      setIsRevealingReview(false)
+    }
+  }
+
+  const visibleCoachMessages = game
+    ? coachMessages.filter((message) => message.gameId === game.id)
+    : []
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -92,7 +135,7 @@ function App() {
               <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
                 <Spade className="h-5 w-5" />
               </span>
-              <Badge variant="secondary">Milestone 4</Badge>
+              <Badge variant="secondary">Milestone 6</Badge>
             </div>
             <h1 className="text-3xl font-semibold tracking-normal md:text-4xl">Poker Trainer</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
@@ -246,9 +289,24 @@ function App() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {game.table_state.status === "complete" ? (
-                    <span className="text-sm text-muted-foreground">
-                      Hand complete{winnerText(game)}.
-                    </span>
+                    <>
+                      <span className="text-sm text-muted-foreground">
+                        Hand complete{winnerText(game)}.
+                      </span>
+                      <Button
+                        disabled={isRevealingReview || gameReview?.game_id === game.id}
+                        onClick={revealGameReview}
+                        size="sm"
+                        variant="outline"
+                      >
+                        <Eye className="mr-2 h-4 w-4" />
+                        {gameReview?.game_id === game.id
+                          ? "Review revealed"
+                          : isRevealingReview
+                            ? "Revealing..."
+                            : "Reveal cards and reads"}
+                      </Button>
+                    </>
                   ) : game.table_state.to_act === 0 ? (
                     game.table_state.legal_actions.map((legalAction) => {
                       if ("min_amount" in legalAction) {
@@ -334,15 +392,36 @@ function App() {
             ) : null}
 
             {game ? (
+              gameReview?.game_id === game.id ? (
+                <div className="mt-4 rounded-md border border-border bg-background p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Eye className="h-4 w-4 text-primary" />
+                    <h3 className="text-base font-medium">Post-Game Reveal</h3>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    {gameReview.seats.map((seat) => (
+                      <ReviewSeatPanel key={seat.seat} seat={seat} />
+                    ))}
+                  </div>
+                </div>
+              ) : null
+            ) : null}
+
+            {game ? (
               <div className="mt-4 rounded-md border border-border bg-background p-4">
                 <h3 className="text-base font-medium">AI Coach</h3>
+                {gameReview?.game_id === game.id ? (
+                  <div className="mt-2 rounded-md border border-primary/20 bg-primary/8 px-3 py-2 text-xs text-muted-foreground">
+                    Coach chat now includes post-game cards and exact bot personalities.
+                  </div>
+                ) : null}
                 <div className="mt-3 min-h-72 max-h-[520px] space-y-3 overflow-auto rounded-md border border-border bg-card p-3 text-sm">
-                  {coachMessages.length === 0 ? (
+                  {visibleCoachMessages.length === 0 ? (
                     <p className="text-muted-foreground">
                       Ask about ranges, sizing, pot odds, or opponent tendencies.
                     </p>
                   ) : (
-                    coachMessages.map((message, index) => (
+                    visibleCoachMessages.map((message, index) => (
                       <div
                         className={`max-w-[860px] rounded-md px-4 py-3 leading-6 ${
                           message.role === "coach"
@@ -444,6 +523,35 @@ function SeatPanel({ seat }: { seat: GameSession["table_state"]["seats"][number]
       <Badge className="mt-2" variant={seat.status === "active" ? "secondary" : "outline"}>
         {seat.status}
       </Badge>
+    </div>
+  )
+}
+
+function ReviewSeatPanel({ seat }: { seat: GameReview["seats"][number] }) {
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">{seat.name}</div>
+          <div className="text-xs text-muted-foreground">{seat.position}</div>
+        </div>
+        <Badge variant={seat.role === "bot" ? "default" : "secondary"}>
+          {seat.personality ?? "hero"}
+        </Badge>
+      </div>
+      <div className="flex h-9 gap-1">
+        {seat.hole_cards.map((card) => (
+          <span
+            className="rounded border border-border bg-background px-2 py-1 text-sm font-semibold"
+            key={card}
+          >
+            {card}
+          </span>
+        ))}
+      </div>
+      {seat.personality_brief ? (
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{seat.personality_brief}</p>
+      ) : null}
     </div>
   )
 }
