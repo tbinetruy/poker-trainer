@@ -1,4 +1,5 @@
 import json
+import uuid
 from asyncio import Lock
 
 from channels.layers import get_channel_layer
@@ -6,11 +7,13 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from apps.poker_engine import apply_action
-from apps.poker_engine.bots import advance_bots_until_human_turn
+from apps.poker_engine.bots import advance_bots_until_human_turn_async
 from apps.poker_engine.engine import InvalidAction
+from apps.poker_engine.llm import LLMProviderUnavailable
+from apps.tables.llm import get_default_llm_provider
 from apps.tables.models import GameSession
 from apps.tables.selectors import serialize_game
-from apps.tables.services import build_initial_table_state
+from apps.tables.services import build_initial_table_state_async
 
 _ACTION_LOCKS: dict[str, Lock] = {}
 
@@ -35,11 +38,28 @@ async def create_game(request: HttpRequest) -> JsonResponse:
     difficulty = payload.get("difficulty", GameSession.Difficulty.BEGINNER)
     if difficulty not in GameSession.Difficulty.values:
         difficulty = GameSession.Difficulty.BEGINNER
+    llm_bots_enabled = bool(payload.get("llm_bots") or payload.get("llmBots"))
 
+    game_id = uuid.uuid4()
+    llm_provider = get_default_llm_provider() if llm_bots_enabled else None
+    if llm_bots_enabled and llm_provider is None:
+        return JsonResponse({"detail": "LLM opponents are not configured."}, status=503)
+    button_seat = await GameSession.objects.acount() % 5
+    try:
+        table_state = await build_initial_table_state_async(
+            difficulty,
+            seed=str(game_id),
+            llm_bots_enabled=llm_bots_enabled,
+            llm_provider=llm_provider,
+            button_seat=button_seat,
+        )
+    except LLMProviderUnavailable as error:
+        return JsonResponse({"detail": str(error)}, status=503)
     game = await GameSession.objects.acreate(
+        id=game_id,
         difficulty=difficulty,
         status=GameSession.Status.ACTIVE,
-        table_state=build_initial_table_state(difficulty),
+        table_state=table_state,
     )
     return JsonResponse(serialize_game(game), status=201)
 
@@ -89,7 +109,15 @@ async def game_action(request: HttpRequest, game_id) -> JsonResponse:
                 action=str(payload.get("action", "")),
                 amount=amount,
             )
-            game.table_state = advance_bots_until_human_turn(game.table_state)
+            llm_provider = (
+                get_default_llm_provider() if game.table_state.get("llm_bots_enabled") else None
+            )
+            game.table_state = await advance_bots_until_human_turn_async(
+                game.table_state,
+                llm_provider=llm_provider,
+            )
+        except LLMProviderUnavailable as error:
+            return JsonResponse({"detail": str(error)}, status=503)
         except (InvalidAction, TypeError, ValueError) as error:
             return JsonResponse({"detail": str(error)}, status=400)
 

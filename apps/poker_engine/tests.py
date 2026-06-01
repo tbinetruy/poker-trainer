@@ -1,13 +1,27 @@
+import asyncio
+import json
+from pathlib import Path
+
 import pytest
+from asgiref.sync import async_to_sync
 
 from apps.poker_engine import apply_action, create_hand, legal_actions, visible_state
 from apps.poker_engine.bots import (
     BOT_PERSONALITY_POOLS,
     advance_bots_until_human_turn,
+    advance_bots_until_human_turn_async,
     assign_bot_personalities,
 )
 from apps.poker_engine.engine import InvalidAction, _showdown
 from apps.poker_engine.evaluator import evaluate_seven
+from apps.poker_engine.llm import (
+    CodexCLIPokerProvider,
+    LLMProviderUnavailable,
+    OpenAIResponsesPokerProvider,
+    build_llm_decision_context,
+    load_openai_api_key,
+    validate_llm_decision,
+)
 
 
 def test_new_hand_posts_blinds_and_sets_preflop_action() -> None:
@@ -20,6 +34,20 @@ def test_new_hand_posts_blinds_and_sets_preflop_action() -> None:
     assert state["seats"][1]["street_bet"] == 50
     assert state["seats"][2]["street_bet"] == 100
     assert {action["action"] for action in legal_actions(state)} == {"fold", "call", "raise"}
+
+
+def test_new_hand_rotates_button_and_blinds() -> None:
+    state = create_hand(difficulty="beginner", seed="rotated-button", button_seat=2)
+
+    assert state["button_seat"] == 2
+    assert [seat["position"] for seat in state["seats"]] == ["UTG", "CO", "BTN", "SB", "BB"]
+    assert state["seats"][3]["street_bet"] == 50
+    assert state["seats"][4]["street_bet"] == 100
+    assert state["to_act"] == 0
+    assert state["hand_history"][:2] == [
+        {"street": "preflop", "seat": 3, "action": "small_blind", "amount": 50},
+        {"street": "preflop", "seat": 4, "action": "big_blind", "amount": 100},
+    ]
 
 
 def test_preflop_calls_advance_to_flop() -> None:
@@ -216,3 +244,258 @@ def test_bot_sizing_uses_live_committed_pot() -> None:
     decision = STRATEGIES["pro"].choose_action(state, 1)
 
     assert decision == {"action": "bet", "amount": 750}
+
+
+def test_llm_decision_context_only_reveals_acting_bot_private_information() -> None:
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="llm-redaction"),
+        "advanced",
+    )
+
+    context = build_llm_decision_context(state, seat_id=3)
+
+    assert context["acting_player"]["hole_cards"] == state["seats"][3]["hole_cards"]
+    assert context["acting_player"]["personality"] == state["seats"][3]["personality"]
+    assert context["table"]["seats"][3]["hole_cards"] == state["seats"][3]["hole_cards"]
+    assert context["table"]["seats"][0]["hole_cards"] == []
+    assert context["table"]["seats"][1]["hole_cards"] == []
+    assert "deck" not in context
+    assert "seed" not in context
+    assert "personality" not in context["table"]["seats"][1]
+
+
+def test_validate_llm_decision_rejects_illegal_amount() -> None:
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="llm-validation"),
+        "advanced",
+    )
+
+    decision = validate_llm_decision({"action": "raise", "amount": 10}, state)
+
+    assert decision is None
+
+
+def test_load_openai_api_key_prefers_environment(monkeypatch, tmp_path) -> None:
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text('{"OPENAI_API_KEY":"from-file"}')
+    monkeypatch.setenv("OPENAI_API_KEY", "from-env")
+
+    assert load_openai_api_key(auth_path) == "from-env"
+
+
+def test_load_openai_api_key_falls_back_to_codex_access_token(monkeypatch, tmp_path) -> None:
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text('{"OPENAI_API_KEY":null,"tokens":{"access_token":"codex-token"}}')
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    assert load_openai_api_key(auth_path) == "codex-token"
+
+
+def test_async_bot_uses_valid_llm_decision() -> None:
+    class Provider:
+        max_decisions_per_advance = 10
+
+        async def choose_action(self, state, seat_id):
+            return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "priced in"}
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="llm-valid-decision"),
+        "advanced",
+    )
+    state["llm_bots_enabled"] = True
+
+    state = async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=Provider())
+
+    assert state["hand_history"][-2]["action"] == "call"
+    assert state["hand_history"][-1]["action"] == "call"
+    assert state["to_act"] == 0
+
+
+def test_async_bot_respects_llm_decision_limit() -> None:
+    class Provider:
+        max_decisions_per_advance = 1
+
+        def __init__(self):
+            self.calls = 0
+
+        async def choose_action(self, state, seat_id):
+            self.calls += 1
+            return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "continue"}
+
+    provider = Provider()
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="llm-decision-limit"),
+        "beginner",
+    )
+    state["llm_bots_enabled"] = True
+
+    state = async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=provider)
+
+    assert provider.calls == 1
+    assert state["to_act"] == 0
+
+
+def test_async_bot_falls_back_when_llm_decision_is_invalid() -> None:
+    class Provider:
+        max_decisions_per_advance = 10
+
+        async def choose_action(self, state, seat_id):
+            return {"action": "raise", "amount": 1, "confidence": 0.8, "rationale": "bad size"}
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="llm-invalid-decision"),
+        "beginner",
+    )
+    state["llm_bots_enabled"] = True
+
+    state = async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=Provider())
+
+    assert state["hand_history"][-2]["action"] == "call"
+    assert state["hand_history"][-1]["action"] == "call"
+    assert state["to_act"] == 0
+    assert state["llm_bot_errors"] == [
+        {"seat": 3, "error": "InvalidLLMDecision"},
+        {"seat": 4, "error": "InvalidLLMDecision"},
+    ]
+
+
+def test_async_bot_falls_back_when_llm_times_out(monkeypatch) -> None:
+    class Provider:
+        max_decisions_per_advance = 10
+
+        async def choose_action(self, state, seat_id):
+            await asyncio.sleep(0.01)
+            return {"action": "raise", "amount": 500, "confidence": 0.8, "rationale": "late"}
+
+    class ImmediateTimeout:
+        async def __aenter__(self):
+            raise TimeoutError
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr("apps.poker_engine.bots.asyncio.timeout", lambda delay: ImmediateTimeout())
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="llm-timeout"),
+        "beginner",
+    )
+    state["llm_bots_enabled"] = True
+
+    state = async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=Provider())
+
+    assert state["to_act"] == 0
+    assert state["llm_bot_errors"] == [
+        {"seat": 3, "error": "TimeoutError"},
+        {"seat": 4, "error": "TimeoutError"},
+    ]
+
+
+def test_async_bot_raises_when_llm_is_unauthorized() -> None:
+    class Response:
+        status_code = 401
+
+    class UnauthorizedError(Exception):
+        response = Response()
+
+    class Provider:
+        async def choose_action(self, state, seat_id):
+            raise UnauthorizedError
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="llm-unauthorized"),
+        "beginner",
+    )
+    state["llm_bots_enabled"] = True
+
+    with pytest.raises(LLMProviderUnavailable):
+        async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=Provider())
+
+
+def test_openai_provider_sends_redacted_structured_output_request() -> None:
+    import httpx
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers["authorization"]
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    '{"action":"call","amount":100,'
+                                    '"confidence":0.7,"rationale":"continue"}'
+                                ),
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="llm-provider"),
+        "advanced",
+    )
+    provider = OpenAIResponsesPokerProvider(
+        api_key="test-key",
+        model="test-model",
+        base_url="https://example.test/v1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    decision = async_to_sync(provider.choose_action)(state, 3)
+    prompt_context = json.loads(captured["body"]["input"][1]["content"][0]["text"])
+
+    assert decision == {
+        "action": "call",
+        "amount": 100,
+        "confidence": 0.7,
+        "rationale": "continue",
+    }
+    assert captured["url"] == "https://example.test/v1/responses"
+    assert captured["authorization"] == "Bearer test-key"
+    assert captured["body"]["model"] == "test-model"
+    assert captured["body"]["text"]["format"]["type"] == "json_schema"
+    assert captured["body"]["text"]["format"]["strict"] is True
+    assert prompt_context["acting_player"]["hole_cards"] == state["seats"][3]["hole_cards"]
+    assert prompt_context["table"]["seats"][0]["hole_cards"] == []
+    assert prompt_context["table"]["seats"][1]["hole_cards"] == []
+
+
+def test_codex_cli_provider_parses_output_file(monkeypatch) -> None:
+    class Process:
+        returncode = 0
+
+        async def communicate(self, prompt):
+            assert b"Poker context" in prompt
+            return b"", b""
+
+    async def create_process(*args, **kwargs):
+        output_path = Path(args[args.index("--output-last-message") + 1])
+        output_path.write_text(
+            '{"action":"call","amount":100,"confidence":0.6,"rationale":"continue"}'
+        )
+        return Process()
+
+    monkeypatch.setattr("apps.poker_engine.llm.asyncio.create_subprocess_exec", create_process)
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="codex-cli-provider"),
+        "beginner",
+    )
+    provider = CodexCLIPokerProvider(command="codex-test")
+
+    decision = async_to_sync(provider.choose_action)(state, 3)
+
+    assert decision == {
+        "action": "call",
+        "amount": 100,
+        "confidence": 0.6,
+        "rationale": "continue",
+    }

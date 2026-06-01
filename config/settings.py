@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -80,3 +81,11 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
 }
+
+POKER_OPENAI_MODEL = os.getenv("POKER_OPENAI_MODEL", "gpt-4.1-mini")
+POKER_OPENAI_TIMEOUT = float(os.getenv("POKER_OPENAI_TIMEOUT", "12"))
+POKER_OPENAI_AUTH_PATH = os.getenv("POKER_OPENAI_AUTH_PATH")
+POKER_LLM_PROVIDER = os.getenv("POKER_LLM_PROVIDER", "codex_cli")
+POKER_CODEX_COMMAND = os.getenv("POKER_CODEX_COMMAND", "codex")
+POKER_CODEX_MODEL = os.getenv("POKER_CODEX_MODEL") or None
+POKER_CODEX_TIMEOUT = float(os.getenv("POKER_CODEX_TIMEOUT", "20"))

@@ -1,9 +1,11 @@
+import asyncio
 import random
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from apps.poker_engine.engine import apply_action, legal_actions
 from apps.poker_engine.evaluator import RANK_VALUE
+from apps.poker_engine.llm import LLMProviderUnavailable, PokerLLMProvider, validate_llm_decision
 
 BEGINNER_POOL = ["fish", "fish", "fish", "tight"]
 MEDIUM_POOL = ["fish", "tight", "tag", "pro"]
@@ -135,6 +137,66 @@ def advance_bots_until_human_turn(state: dict, *, max_actions: int = 100) -> dic
     raise RuntimeError("Bot action loop exceeded max_actions.")
 
 
+async def advance_bots_until_human_turn_async(
+    state: dict[str, Any],
+    *,
+    llm_provider: PokerLLMProvider | None = None,
+    max_actions: int = 100,
+) -> dict[str, Any]:
+    next_state = state
+    llm_decisions_used = 0
+    max_llm_decisions = getattr(llm_provider, "max_decisions_per_advance", max_actions)
+    for _ in range(max_actions):
+        if next_state["status"] == "complete" or next_state["to_act"] is None:
+            return next_state
+        seat = next_state["seats"][next_state["to_act"]]
+        if seat["seat"] == HERO_SEAT or seat["role"] != "bot":
+            return next_state
+
+        action_provider = llm_provider if llm_decisions_used < max_llm_decisions else None
+        decision = await _choose_bot_action_async(next_state, seat["seat"], action_provider)
+        if action_provider is not None:
+            llm_decisions_used += 1
+        next_state = apply_action(
+            next_state,
+            seat_id=seat["seat"],
+            action=decision["action"],
+            amount=decision.get("amount"),
+        )
+
+    raise RuntimeError("Bot action loop exceeded max_actions.")
+
+
+async def _choose_bot_action_async(
+    state: dict[str, Any],
+    seat_id: int,
+    llm_provider: PokerLLMProvider | None,
+) -> dict[str, Any]:
+    if state.get("llm_bots_enabled") and llm_provider is not None:
+        try:
+            timeout = getattr(llm_provider, "decision_timeout", 8)
+            async with asyncio.timeout(timeout):
+                decision = await llm_provider.choose_action(state, seat_id)
+            validated = validate_llm_decision(decision, state)
+            if validated is not None:
+                return validated
+            state.setdefault("llm_bot_errors", []).append(
+                {"seat": seat_id, "error": "InvalidLLMDecision"}
+            )
+        except Exception as error:
+            if _is_llm_auth_error(error):
+                raise LLMProviderUnavailable(
+                    "LLM opponents are not authorized for the Responses API."
+                ) from error
+            state.setdefault("llm_bot_errors", []).append(
+                {"seat": seat_id, "error": error.__class__.__name__}
+            )
+
+    personality = state["seats"][seat_id].get("personality", "fish")
+    strategy = STRATEGIES.get(personality, STRATEGIES["fish"])
+    return strategy.choose_action(state, seat_id)
+
+
 def _actions_by_name(state: dict) -> dict:
     return {action["action"]: action for action in legal_actions(state)}
 
@@ -167,3 +229,8 @@ def _live_pot(state: dict) -> int:
 def _bot_rng(state: dict, seat_id: int) -> random.Random:
     seed = f"{state.get('seed')}:{seat_id}:{len(state['hand_history'])}"
     return random.Random(seed)
+
+
+def _is_llm_auth_error(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) in {401, 403}

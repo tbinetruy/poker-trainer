@@ -30,11 +30,14 @@ export type TableState = {
   street: string
   button_seat: number
   pot: number
+  current_bet: number
+  min_raise: number
   to_act: number | null
   community_cards: string[]
   seats: Seat[]
   last_action: string | null
   difficulty: Difficulty
+  llm_bots_enabled?: boolean
   legal_actions: LegalAction[]
   hand_history: Array<Record<string, unknown>>
   winners: Array<{ seat: number; amount: number }>

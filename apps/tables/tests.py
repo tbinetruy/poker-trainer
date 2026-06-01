@@ -7,6 +7,7 @@ from channels.testing import WebsocketCommunicator
 from django.test import AsyncClient
 from django.urls import path, reverse
 
+from apps.poker_engine.llm import CodexCLIPokerProvider, LLMProviderUnavailable
 from apps.tables.consumers import TableConsumer
 from apps.tables.models import GameSession
 from apps.tables.services import create_game_session
@@ -48,6 +49,72 @@ def test_create_game_endpoint_returns_session() -> None:
     assert response.json()["table_state"]["seats"][1]["hole_cards"] == []
     assert "personality" not in response.json()["table_state"]["seats"][1]
     assert GameSession.objects.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_game_endpoint_can_enable_llm_bots(monkeypatch) -> None:
+    class Provider:
+        async def choose_action(self, state, seat_id):
+            return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "continue"}
+
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: Provider())
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-list"),
+        data={"difficulty": "beginner", "llm_bots": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 201
+    assert response.json()["table_state"]["llm_bots_enabled"] is True
+    assert response.json()["table_state"]["to_act"] == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_game_endpoint_rejects_llm_bots_when_unconfigured(monkeypatch) -> None:
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: None)
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-list"),
+        data={"difficulty": "beginner", "llm_bots": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "LLM opponents are not configured."
+    assert GameSession.objects.count() == 0
+
+
+def test_default_llm_provider_uses_codex_cli(settings, tmp_path) -> None:
+    from apps.tables.llm import get_default_llm_provider
+
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text('{"tokens":{"access_token":"codex-token"}}')
+    settings.POKER_LLM_PROVIDER = "codex_cli"
+    settings.POKER_OPENAI_AUTH_PATH = str(auth_path)
+
+    provider = get_default_llm_provider()
+
+    assert isinstance(provider, CodexCLIPokerProvider)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_game_endpoint_rejects_unauthorized_llm_provider(monkeypatch) -> None:
+    async def build_state(*args, **kwargs):
+        raise LLMProviderUnavailable("LLM opponents are not authorized.")
+
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: object())
+    monkeypatch.setattr("apps.tables.views.build_initial_table_state_async", build_state)
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-list"),
+        data={"difficulty": "beginner", "llm_bots": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "LLM opponents are not authorized."
+    assert GameSession.objects.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)

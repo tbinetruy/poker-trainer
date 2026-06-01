@@ -7,12 +7,13 @@ from apps.poker_engine.evaluator import RANKS, evaluate_seven
 SUITS = "cdhs"
 STREETS = ["preflop", "flop", "turn", "river"]
 SEATS = [
-    {"seat": 0, "name": "Hero", "role": "human", "position": "BTN"},
-    {"seat": 1, "name": "Villain 1", "role": "bot", "position": "SB"},
-    {"seat": 2, "name": "Villain 2", "role": "bot", "position": "BB"},
-    {"seat": 3, "name": "Villain 3", "role": "bot", "position": "UTG"},
-    {"seat": 4, "name": "Villain 4", "role": "bot", "position": "CO"},
+    {"seat": 0, "name": "Hero", "role": "human"},
+    {"seat": 1, "name": "Villain 1", "role": "bot"},
+    {"seat": 2, "name": "Villain 2", "role": "bot"},
+    {"seat": 3, "name": "Villain 3", "role": "bot"},
+    {"seat": 4, "name": "Villain 4", "role": "bot"},
 ]
+POSITION_ORDER = ["BTN", "SB", "BB", "UTG", "CO"]
 
 
 class InvalidAction(ValueError):
@@ -29,11 +30,13 @@ def create_hand(
     button_seat: int = 0,
 ) -> dict[str, Any]:
     deck = _shuffled_deck(seed)
+    button_seat = button_seat % len(SEATS)
     seats = []
     for seat in SEATS:
         seats.append(
             {
                 **seat,
+                "position": _position_for_seat(seat["seat"], button_seat),
                 "stack": starting_stack,
                 "hole_cards": [deck.pop(), deck.pop()],
                 "status": "active",
@@ -64,10 +67,12 @@ def create_hand(
         "winners": [],
     }
 
-    _post_blind(state, seat_id=1, amount=small_blind, blind_type="small_blind")
-    _post_blind(state, seat_id=2, amount=big_blind, blind_type="big_blind")
+    small_blind_seat = _seat_after(button_seat)
+    big_blind_seat = _seat_after(small_blind_seat)
+    _post_blind(state, seat_id=small_blind_seat, amount=small_blind, blind_type="small_blind")
+    _post_blind(state, seat_id=big_blind_seat, amount=big_blind, blind_type="big_blind")
     state["current_bet"] = big_blind
-    state["to_act"] = _next_active_seat(state, after_seat=2)
+    state["to_act"] = _next_active_seat(state, after_seat=big_blind_seat)
     state["legal_actions"] = legal_actions(state)
     return state
 
@@ -178,6 +183,7 @@ def visible_state(state: dict[str, Any], *, hero_seat: int = 0) -> dict[str, Any
     visible.pop("seed", None)
     visible.pop("acted_seats", None)
     visible.pop("bot_personality_pool", None)
+    visible.pop("llm_bot_errors", None)
 
     for seat in visible["seats"]:
         seat.pop("personality", None)
@@ -325,6 +331,15 @@ def _next_active_seat(state: dict[str, Any], *, after_seat: int) -> int | None:
 
 def _seat_order(after_seat: int, seat_count: int) -> list[int]:
     return [((after_seat + offset) % seat_count) for offset in range(1, seat_count + 1)]
+
+
+def _seat_after(seat_id: int) -> int:
+    return (seat_id + 1) % len(SEATS)
+
+
+def _position_for_seat(seat_id: int, button_seat: int) -> str:
+    offset = (seat_id - button_seat) % len(SEATS)
+    return POSITION_ORDER[offset]
 
 
 def _seat(state: dict[str, Any], seat_id: int) -> dict[str, Any]:

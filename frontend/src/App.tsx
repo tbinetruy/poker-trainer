@@ -1,4 +1,4 @@
-import { Bot, Brain, Radio, Spade, Users } from "lucide-react"
+import { Bot, Brain, Radio, Spade, ToggleRight, Users } from "lucide-react"
 import { useState } from "react"
 
 import { applyGameAction, createGame } from "@/lib/api"
@@ -15,7 +15,9 @@ const difficulties: Array<{ value: Difficulty; label: string; detail: string }> 
 
 function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>("beginner")
+  const [llmBots, setLlmBots] = useState(false)
   const [game, setGame] = useState<GameSession | null>(null)
+  const [actionAmounts, setActionAmounts] = useState<Record<string, number>>({})
   const [isStarting, setIsStarting] = useState(false)
   const [isActing, setIsActing] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
@@ -24,7 +26,7 @@ function App() {
     setIsStarting(true)
     setStartError(null)
     try {
-      setGame(await createGame(difficulty))
+      setGame(await createGame(difficulty, llmBots))
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to start game.")
     } finally {
@@ -32,7 +34,7 @@ function App() {
     }
   }
 
-  const submitAction = async (legalAction: LegalAction) => {
+  const submitAction = async (legalAction: LegalAction, amountOverride?: number) => {
     if (!game) {
       return
     }
@@ -41,11 +43,12 @@ function App() {
     setStartError(null)
     try {
       const amount =
-        "amount" in legalAction
+        amountOverride ??
+        ("amount" in legalAction
           ? legalAction.amount
           : "min_amount" in legalAction
             ? legalAction.min_amount
-            : undefined
+            : undefined)
       setGame(await applyGameAction(game.id, { seat: 0, action: legalAction.action, amount }))
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to apply action.")
@@ -63,11 +66,11 @@ function App() {
               <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
                 <Spade className="h-5 w-5" />
               </span>
-              <Badge variant="secondary">Milestone 3</Badge>
+              <Badge variant="secondary">Milestone 4</Badge>
             </div>
             <h1 className="text-3xl font-semibold tracking-normal md:text-4xl">Poker Trainer</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Deterministic Hold'em with private bot personalities, server-owned actions, and
+              Deterministic Hold'em with private bot personalities, optional LLM opponents, and
               Channels wired for realtime table updates.
             </p>
           </div>
@@ -82,13 +85,13 @@ function App() {
           </div>
         ) : null}
 
-        <section className="grid gap-4 lg:grid-cols-[320px_1fr]">
-          <aside className="space-y-4">
+        <section className="grid gap-4">
+          <aside className="grid gap-3 lg:grid-cols-[2fr_1fr_1fr]">
             <Card>
               <CardHeader>
                 <CardTitle>Table Strength</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="grid gap-2 md:grid-cols-3">
                 {difficulties.map((option) => (
                   <button
                     className={`w-full rounded-md border p-3 text-left transition ${
@@ -113,15 +116,35 @@ function App() {
               <CardHeader>
                 <CardTitle>Realtime</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <CardContent className="grid gap-3 text-sm text-muted-foreground">
                 <div className="flex items-center gap-2">
                   <Radio className="h-4 w-4 text-primary" />
-                  Channels route: <code className="text-foreground">/ws/tables/:id/</code>
+                  <code className="text-foreground">/ws/tables/:id/</code>
                 </div>
                 <div className="flex items-center gap-2">
                   <Brain className="h-4 w-4 text-primary" />
-                  Async views are ready for future LLM calls.
+                  Redacted LLM context.
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Opponent Engine</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border p-3 text-sm">
+                  <span className="flex items-center gap-2">
+                    <ToggleRight className="h-4 w-4 text-primary" />
+                    LLM opponents
+                  </span>
+                  <input
+                    checked={llmBots}
+                    className="h-4 w-4 accent-primary"
+                    onChange={(event) => setLlmBots(event.target.checked)}
+                    type="checkbox"
+                  />
+                </label>
               </CardContent>
             </Card>
           </aside>
@@ -134,42 +157,56 @@ function App() {
                   {game
                     ? `${game.table_state.street} · to act: ${
                         game.table_state.to_act ?? "none"
-                      } · Game ${game.id}`
+                      } · ${game.table_state.llm_bots_enabled ? "LLM bots" : "rule bots"} · Game ${game.id}`
                     : "Start a game to create a table session."}
                 </p>
               </div>
               <Badge>{game?.status ?? "idle"}</Badge>
             </div>
 
-            <div className="grid min-h-[420px] place-items-center rounded-md bg-[radial-gradient(circle_at_center,hsl(156_42%_28%),hsl(156_45%_16%))] p-6 text-white">
-              <div className="relative h-[320px] w-full max-w-[720px] rounded-[48%] border border-white/20 bg-emerald-950/40 shadow-2xl">
+            <div className="min-h-[420px] rounded-md bg-[radial-gradient(circle_at_center,hsl(156_42%_28%),hsl(156_45%_16%))] p-5 text-white">
+              <div className="grid gap-3 md:grid-cols-5">
                 {(game?.table_state.seats ?? []).map((seat) => (
-                  <div
-                    className="absolute w-32 rounded-md border border-white/15 bg-black/35 p-3 text-center shadow-lg backdrop-blur"
-                    key={seat.seat}
-                    style={seatPosition(seat.seat)}
-                  >
-                    <div className="mb-1 flex justify-center">
-                      {seat.role === "human" ? (
-                        <Users className="h-4 w-4" />
-                      ) : (
-                        <Bot className="h-4 w-4" />
-                      )}
-                    </div>
-                    <div className="truncate text-sm font-medium">{seat.name}</div>
-                    <div className="text-xs text-white/70">
-                      {seat.position} · {seat.stack.toLocaleString()}
-                    </div>
-                  </div>
+                  <SeatPanel key={seat.seat} seat={seat} />
                 ))}
-                <div className="absolute left-1/2 top-1/2 w-44 -translate-x-1/2 -translate-y-1/2 rounded-md border border-white/15 bg-black/25 p-4 text-center">
+              </div>
+              <div className="mt-4 rounded-md border border-white/15 bg-black/25 p-3">
+                <div className="mb-2 text-xs font-semibold uppercase text-white/60">Bet History</div>
+                <div className="grid gap-2 text-sm text-white/75 md:grid-cols-2 xl:grid-cols-3">
+                  {(game?.table_state.hand_history ?? []).slice(-6).map((event, index) => (
+                    <div
+                      className="flex justify-between gap-3 rounded border border-white/10 bg-black/20 px-2 py-1"
+                      key={`compact-${index}-${event.action}`}
+                    >
+                      <span className="truncate">{game ? historyLabel(game, event) : ""}</span>
+                      <span>{historyAmount(event)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-6 grid gap-4 rounded-md border border-white/15 bg-black/15 p-4 lg:grid-cols-[1fr_320px]">
+                <div className="w-64 rounded-md border border-white/15 bg-black/25 p-4 text-center">
                   <div className="text-xs uppercase text-white/60">Pot</div>
-                  <div className="text-2xl font-semibold">{game?.table_state.pot ?? 0}</div>
-                  <div className="mt-3 flex justify-center gap-1">
+                  <div className="text-3xl font-semibold">{game?.table_state.pot ?? 0}</div>
+                  <div className="mt-4 flex min-h-9 justify-center gap-1">
                     {(game?.table_state.community_cards ?? []).map((card) => (
-                      <span className="rounded bg-white px-1.5 py-1 text-xs font-semibold text-slate-950" key={card}>
+                      <span
+                        className="rounded bg-white px-2 py-1 text-sm font-semibold text-slate-950"
+                        key={card}
+                      >
                         {card}
                       </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-white/15 bg-black/25 p-3">
+                  <div className="text-xs font-semibold uppercase text-white/60">Bet History</div>
+                  <div className="mt-2 max-h-40 space-y-1 overflow-auto text-sm text-white/75">
+                    {(game?.table_state.hand_history ?? []).map((event, index) => (
+                      <div className="flex justify-between gap-3" key={`${index}-${event.action}`}>
+                        <span>{game ? historyLabel(game, event) : ""}</span>
+                        <span>{historyAmount(event)}</span>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -178,32 +215,94 @@ function App() {
 
             {game ? (
               <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">Hero</span>
-                  {game.table_state.seats[0].hole_cards.map((card) => (
-                    <span className="rounded-md border bg-background px-2 py-1 font-semibold" key={card}>
-                      {card}
-                    </span>
-                  ))}
+                <div className="text-sm text-muted-foreground">
+                  {game.table_state.status === "complete" ? "Hand finished" : "Hero action"}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {game.table_state.to_act === 0 ? (
-                    game.table_state.legal_actions.map((legalAction) => (
-                      <Button
-                        disabled={isActing}
-                        key={legalAction.action}
-                        onClick={() => submitAction(legalAction)}
-                        size="sm"
-                        variant={legalAction.action === "fold" ? "outline" : "default"}
-                      >
-                        {actionLabel(legalAction)}
-                      </Button>
-                    ))
+                <div className="flex flex-wrap items-center gap-2">
+                  {game.table_state.status === "complete" ? (
+                    <span className="text-sm text-muted-foreground">
+                      Hand complete{winnerText(game)}.
+                    </span>
+                  ) : game.table_state.to_act === 0 ? (
+                    game.table_state.legal_actions.map((legalAction) => {
+                      if ("min_amount" in legalAction) {
+                        const amount = actionAmounts[legalAction.action] ?? legalAction.min_amount
+                        return (
+                          <div
+                            className="flex items-center gap-2 rounded-md border border-border bg-background p-1"
+                            key={legalAction.action}
+                          >
+                            <input
+                              className="h-8 w-24 rounded border border-border bg-card px-2 text-sm"
+                              max={legalAction.max_amount}
+                              min={legalAction.min_amount}
+                              onChange={(event) =>
+                                setActionAmounts((current) => ({
+                                  ...current,
+                                  [legalAction.action]: Number(event.target.value),
+                                }))
+                              }
+                              step={game.table_state.stakes.big_blind}
+                              type="number"
+                              value={amount}
+                            />
+                            <Button
+                              disabled={isActing}
+                              onClick={() => submitAction(legalAction, amount)}
+                              size="sm"
+                            >
+                              {legalAction.action}
+                            </Button>
+                          </div>
+                        )
+                      }
+
+                      return (
+                        <Button
+                          disabled={isActing}
+                          key={legalAction.action}
+                          onClick={() => submitAction(legalAction)}
+                          size="sm"
+                          variant={legalAction.action === "fold" ? "outline" : "default"}
+                        >
+                          {actionLabel(legalAction)}
+                        </Button>
+                      )
+                    })
                   ) : (
                     <span className="text-sm text-muted-foreground">
                       Waiting for simulator/bot action.
                     </span>
                   )}
+                </div>
+              </div>
+            ) : null}
+
+            {game ? (
+              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_280px]">
+                <div className="rounded-md border border-border bg-background p-3">
+                  <h3 className="text-sm font-medium">Bet History</h3>
+                  <div className="mt-2 max-h-44 space-y-1 overflow-auto text-sm text-muted-foreground">
+                    {game.table_state.hand_history.map((event, index) => (
+                      <div className="flex justify-between gap-3" key={`${index}-${event.action}`}>
+                        <span>{historyLabel(game, event)}</span>
+                        <span>{historyAmount(event)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-border bg-background p-3">
+                  <h3 className="text-sm font-medium">Betting</h3>
+                  <div className="mt-2 space-y-1 text-sm text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>Current bet</span>
+                      <span>{game.table_state.current_bet.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Minimum raise</span>
+                      <span>{game.table_state.min_raise.toLocaleString()}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -224,16 +323,77 @@ function actionLabel(action: LegalAction) {
   return action.action
 }
 
-function seatPosition(seat: number) {
-  const positions = [
-    { left: "50%", bottom: "-28px", transform: "translateX(-50%)" },
-    { right: "-18px", bottom: "74px" },
-    { right: "18px", top: "24px" },
-    { left: "18px", top: "24px" },
-    { left: "-18px", bottom: "74px" },
-  ]
+function winnerText(game: GameSession) {
+  const winners = game.table_state.winners
+  if (winners.length === 0) {
+    return ""
+  }
 
-  return positions[seat] ?? positions[0]
+  return `: ${winners
+    .map((winner) => {
+      const seat = game.table_state.seats.find((item) => item.seat === winner.seat)
+      return `${seat?.name ?? `Seat ${winner.seat}`} wins ${winner.amount}`
+    })
+    .join(", ")}`
+}
+
+function SeatPanel({ seat }: { seat: GameSession["table_state"]["seats"][number] }) {
+  return (
+    <div className="rounded-md border border-white/15 bg-black/30 p-3 text-center shadow-lg">
+      <div className="mb-2 flex items-center justify-center gap-1">
+        {seat.role === "human" ? <Users className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+        <Badge variant={positionBadgeVariant(seat.position)}>{seat.position}</Badge>
+      </div>
+      <div className="truncate text-sm font-medium">{seat.name}</div>
+      <div className="text-xs text-white/70">{seat.stack.toLocaleString()}</div>
+      {seat.hole_cards.length > 0 ? (
+        <div className="mt-2 flex h-8 justify-center gap-1">
+          {seat.hole_cards.map((card) => (
+            <span
+              className="rounded bg-white px-2 py-1 text-sm font-semibold text-slate-950"
+              key={card}
+            >
+              {card}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 h-8" />
+      )}
+      <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-white/75">
+        <span>Bet {seat.street_bet.toLocaleString()}</span>
+        <span>In {seat.committed.toLocaleString()}</span>
+      </div>
+      <Badge className="mt-2" variant={seat.status === "active" ? "secondary" : "outline"}>
+        {seat.status}
+      </Badge>
+    </div>
+  )
+}
+
+function historyLabel(game: GameSession, event: Record<string, unknown>) {
+  const seatId = typeof event.seat === "number" ? event.seat : null
+  const seat = seatId === null ? null : game.table_state.seats.find((item) => item.seat === seatId)
+  const actor = seat?.name ?? "Dealer"
+  return `${String(event.street)} · ${actor} ${formatAction(String(event.action))}`
+}
+
+function historyAmount(event: Record<string, unknown>) {
+  if (typeof event.total === "number") {
+    return `to ${event.total.toLocaleString()}`
+  }
+  if (typeof event.amount === "number") {
+    return event.amount.toLocaleString()
+  }
+  return ""
+}
+
+function formatAction(action: string) {
+  return action.replaceAll("_", " ")
+}
+
+function positionBadgeVariant(position: string): "default" | "secondary" {
+  return position === "BTN" || position === "SB" || position === "BB" ? "default" : "secondary"
 }
 
 export default App
