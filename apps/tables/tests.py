@@ -165,6 +165,41 @@ def test_game_action_endpoint_rejects_non_hero_action() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_game_advice_endpoint_returns_coach_answer(monkeypatch) -> None:
+    class Provider:
+        async def advise_hero(self, state, *, question, hero_seat=0):
+            assert question == "What should I do?"
+            assert state["seats"][hero_seat]["role"] == "human"
+            return "Call is reasonable, but raising applies pressure."
+
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: Provider())
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-advice", kwargs={"game_id": game.id}),
+        data={"question": "What should I do?"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "Call is reasonable, but raising applies pressure."}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_game_advice_endpoint_rejects_empty_question() -> None:
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+    client = AsyncClient()
+    response = async_to_sync(client.post)(
+        reverse("game-advice", kwargs={"game_id": game.id}),
+        data={"question": "   "},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Question is required."
+
+
+@pytest.mark.django_db(transaction=True)
 def test_table_socket_sends_snapshot_for_existing_game() -> None:
     game = create_game_session(GameSession.Difficulty.BEGINNER)
 

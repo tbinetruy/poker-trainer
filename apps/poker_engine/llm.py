@@ -45,6 +45,15 @@ class PokerLLMProvider(Protocol):
     async def choose_action(self, state: dict[str, Any], seat_id: int) -> dict[str, Any]:
         pass
 
+    async def advise_hero(
+        self,
+        state: dict[str, Any],
+        *,
+        question: str,
+        hero_seat: int = 0,
+    ) -> str:
+        pass
+
 
 class LLMProviderUnavailable(RuntimeError):
     pass
@@ -114,6 +123,65 @@ class OpenAIResponsesPokerProvider:
 
         return json.loads(_extract_response_text(response.json()))
 
+    async def advise_hero(
+        self,
+        state: dict[str, Any],
+        *,
+        question: str,
+        hero_seat: int = 0,
+    ) -> str:
+        try:
+            import httpx
+        except ImportError as error:  # pragma: no cover - dependency health is checked separately.
+            raise RuntimeError("httpx is required for OpenAI LLM advice.") from error
+
+        payload = {
+            "model": self.model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You are a poker coach helping Hero make range-based decisions. "
+                                "Use only the provided hero-visible context. Do not claim to know "
+                                "hidden opponent cards, deck order, or private bot personalities."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": json.dumps(
+                                {
+                                    "question": question,
+                                    "context": build_hero_advice_context(state, hero_seat),
+                                },
+                                separators=(",", ":"),
+                            ),
+                        }
+                    ],
+                },
+            ],
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
+            response = await client.post(
+                f"{self.base_url.rstrip('/')}/responses",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+
+        return _extract_response_text(response.json())
+
 
 @dataclass(frozen=True)
 class CodexCLIPokerProvider:
@@ -172,6 +240,67 @@ class CodexCLIPokerProvider:
             except (OSError, json.JSONDecodeError):
                 return _extract_json_object(stdout.decode(errors="replace"))
 
+    async def advise_hero(
+        self,
+        state: dict[str, Any],
+        *,
+        question: str,
+        hero_seat: int = 0,
+    ) -> str:
+        prompt = (
+            "You are a poker coach helping Hero study no-limit Texas Hold'em.\n"
+            "Use only the hero-visible JSON context. Do not claim to know hidden opponent cards, "
+            "deck order, or private bot personalities. Discuss ranges, pot odds, bet sizing, "
+            "position, and opponent tendencies inferred from public actions.\n"
+            "Keep the answer concise and actionable.\n"
+            f"Hero question: {question}\n"
+            "Hero-visible context:\n"
+            f"{json.dumps(build_hero_advice_context(state, hero_seat), separators=(',', ':'))}"
+        )
+        return await self._run_codex_text(prompt)
+
+    async def _run_codex_text(self, prompt: str) -> str:
+        with tempfile.TemporaryDirectory(prefix="poker-codex-") as temp_dir:
+            output_path = Path(temp_dir) / "response.txt"
+            args = [
+                self.command,
+                "-a",
+                "never",
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "--ignore-rules",
+                "--output-last-message",
+                str(output_path),
+            ]
+            if self.model:
+                args.extend(["--model", self.model])
+            args.append("-")
+
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=temp_dir,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate(prompt.encode())
+            if process.returncode != 0:
+                stderr_text = stderr.decode(errors="replace")[-500:]
+                stdout_text = stdout.decode(errors="replace")[-500:]
+                detail = stderr_text or stdout_text
+                raise LLMProviderUnavailable(f"Codex CLI coach failed: {detail.strip()}")
+
+            try:
+                answer = output_path.read_text().strip()
+            except OSError:
+                answer = stdout.decode(errors="replace").strip()
+            if not answer:
+                raise ValueError("Codex CLI coach returned an empty response.")
+            return answer
+
 
 def build_llm_decision_context(state: dict[str, Any], seat_id: int) -> dict[str, Any]:
     acting_seat = state["seats"][seat_id]
@@ -213,6 +342,44 @@ def build_llm_decision_context(state: dict[str, Any], seat_id: int) -> dict[str,
         },
         "legal_actions": legal_actions(state),
         "hand_history": list(state["hand_history"]),
+    }
+
+
+def build_hero_advice_context(state: dict[str, Any], hero_seat: int = 0) -> dict[str, Any]:
+    hero = state["seats"][hero_seat]
+    return {
+        "game": {
+            "variant": state["variant"],
+            "street": state["street"],
+            "difficulty": state["difficulty"],
+            "button_seat": state["button_seat"],
+            "stakes": state["stakes"],
+            "status": state["status"],
+        },
+        "hero": {
+            "seat": hero["seat"],
+            "position": hero["position"],
+            "stack": hero["stack"],
+            "status": hero["status"],
+            "committed": hero["committed"],
+            "street_bet": hero["street_bet"],
+            "hole_cards": list(hero["hole_cards"]),
+        },
+        "table": {
+            "community_cards": list(state["community_cards"]),
+            "pot": state["pot"],
+            "live_committed_pot": sum(seat["committed"] for seat in state["seats"]),
+            "current_bet": state["current_bet"],
+            "min_raise": state["min_raise"],
+            "to_act": state["to_act"],
+            "seats": [
+                _visible_seat_for_llm(seat, reveal_hole_cards=seat["seat"] == hero_seat)
+                for seat in state["seats"]
+            ],
+        },
+        "legal_actions": legal_actions(state) if state.get("to_act") == hero_seat else [],
+        "hand_history": list(state["hand_history"]),
+        "winners": list(state.get("winners", [])),
     }
 
 

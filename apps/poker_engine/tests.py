@@ -18,6 +18,7 @@ from apps.poker_engine.llm import (
     CodexCLIPokerProvider,
     LLMProviderUnavailable,
     OpenAIResponsesPokerProvider,
+    build_hero_advice_context,
     build_llm_decision_context,
     load_openai_api_key,
     validate_llm_decision,
@@ -258,6 +259,22 @@ def test_llm_decision_context_only_reveals_acting_bot_private_information() -> N
     assert context["acting_player"]["personality"] == state["seats"][3]["personality"]
     assert context["table"]["seats"][3]["hole_cards"] == state["seats"][3]["hole_cards"]
     assert context["table"]["seats"][0]["hole_cards"] == []
+    assert context["table"]["seats"][1]["hole_cards"] == []
+    assert "deck" not in context
+    assert "seed" not in context
+    assert "personality" not in context["table"]["seats"][1]
+
+
+def test_hero_advice_context_only_reveals_hero_private_information() -> None:
+    state = assign_bot_personalities(
+        create_hand(difficulty="advanced", seed="coach-redaction"),
+        "advanced",
+    )
+
+    context = build_hero_advice_context(state, hero_seat=0)
+
+    assert context["hero"]["hole_cards"] == state["seats"][0]["hole_cards"]
+    assert context["table"]["seats"][0]["hole_cards"] == state["seats"][0]["hole_cards"]
     assert context["table"]["seats"][1]["hole_cards"] == []
     assert "deck" not in context
     assert "seed" not in context

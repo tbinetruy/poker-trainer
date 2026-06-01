@@ -37,6 +37,22 @@ export async function applyGameAction(
   return response.json()
 }
 
+export async function askCoach(gameId: string, question: string): Promise<{ answer: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/games/${gameId}/advice/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ question }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to ask coach: ${await responseErrorDetail(response)}`)
+  }
+
+  return response.json()
+}
+
 async function responseErrorDetail(response: Response) {
   try {
     const payload = await response.json()

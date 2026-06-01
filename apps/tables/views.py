@@ -133,3 +133,39 @@ async def game_action(request: HttpRequest, game_id) -> JsonResponse:
     )
 
     return JsonResponse(snapshot)
+
+
+@csrf_exempt
+async def game_advice(request: HttpRequest, game_id) -> JsonResponse:
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Malformed JSON."}, status=400)
+
+    if not isinstance(payload, dict):
+        return JsonResponse({"detail": "JSON body must be an object."}, status=400)
+
+    question = str(payload.get("question", "")).strip()
+    if not question:
+        return JsonResponse({"detail": "Question is required."}, status=400)
+    if len(question) > 1_000:
+        return JsonResponse({"detail": "Question is too long."}, status=400)
+
+    try:
+        game = await GameSession.objects.aget(id=game_id)
+    except GameSession.DoesNotExist:
+        return JsonResponse({"detail": "Not found."}, status=404)
+
+    provider = get_default_llm_provider()
+    if provider is None:
+        return JsonResponse({"detail": "AI coach is not configured."}, status=503)
+
+    try:
+        answer = await provider.advise_hero(game.table_state, question=question, hero_seat=0)
+    except LLMProviderUnavailable as error:
+        return JsonResponse({"detail": str(error)}, status=503)
+
+    return JsonResponse({"answer": answer})

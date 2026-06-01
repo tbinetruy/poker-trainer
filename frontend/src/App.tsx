@@ -1,7 +1,7 @@
 import { Bot, Brain, Radio, Spade, ToggleRight, Users } from "lucide-react"
 import { useState } from "react"
 
-import { applyGameAction, createGame } from "@/lib/api"
+import { applyGameAction, askCoach, createGame } from "@/lib/api"
 import type { Difficulty, GameSession, LegalAction } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -18,15 +18,21 @@ function App() {
   const [llmBots, setLlmBots] = useState(false)
   const [game, setGame] = useState<GameSession | null>(null)
   const [actionAmounts, setActionAmounts] = useState<Record<string, number>>({})
+  const [coachMessages, setCoachMessages] = useState<Array<{ role: "hero" | "coach"; text: string }>>([])
+  const [coachQuestion, setCoachQuestion] = useState("")
   const [isStarting, setIsStarting] = useState(false)
   const [isActing, setIsActing] = useState(false)
+  const [isAskingCoach, setIsAskingCoach] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
 
   const startGame = async () => {
     setIsStarting(true)
     setStartError(null)
     try {
-      setGame(await createGame(difficulty, llmBots))
+      const nextGame = await createGame(difficulty, llmBots)
+      setGame(nextGame)
+      setCoachMessages([])
+      setCoachQuestion("")
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to start game.")
     } finally {
@@ -54,6 +60,26 @@ function App() {
       setStartError(error instanceof Error ? error.message : "Failed to apply action.")
     } finally {
       setIsActing(false)
+    }
+  }
+
+  const submitCoachQuestion = async () => {
+    if (!game || !coachQuestion.trim()) {
+      return
+    }
+
+    const question = coachQuestion.trim()
+    setCoachQuestion("")
+    setCoachMessages((messages) => [...messages, { role: "hero", text: question }])
+    setIsAskingCoach(true)
+    setStartError(null)
+    try {
+      const response = await askCoach(game.id, question)
+      setCoachMessages((messages) => [...messages, { role: "coach", text: response.answer }])
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : "Failed to ask coach.")
+    } finally {
+      setIsAskingCoach(false)
     }
   }
 
@@ -306,6 +332,57 @@ function App() {
                 </div>
               </div>
             ) : null}
+
+            {game ? (
+              <div className="mt-4 rounded-md border border-border bg-background p-4">
+                <h3 className="text-base font-medium">AI Coach</h3>
+                <div className="mt-3 min-h-72 max-h-[520px] space-y-3 overflow-auto rounded-md border border-border bg-card p-3 text-sm">
+                  {coachMessages.length === 0 ? (
+                    <p className="text-muted-foreground">
+                      Ask about ranges, sizing, pot odds, or opponent tendencies.
+                    </p>
+                  ) : (
+                    coachMessages.map((message, index) => (
+                      <div
+                        className={`max-w-[860px] rounded-md px-4 py-3 leading-6 ${
+                          message.role === "coach"
+                            ? "bg-muted text-foreground"
+                            : "ml-auto bg-primary text-primary-foreground"
+                        }`}
+                        key={`${message.role}-${index}`}
+                      >
+                        {message.role === "coach" ? (
+                          <MarkdownText text={message.text} />
+                        ) : (
+                          message.text
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <input
+                    className="min-w-0 flex-1 rounded-md border border-input bg-card px-3 py-2 text-sm"
+                    disabled={isAskingCoach}
+                    onChange={(event) => setCoachQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void submitCoachQuestion()
+                      }
+                    }}
+                    placeholder="Ask the coach..."
+                    value={coachQuestion}
+                  />
+                  <Button
+                    disabled={isAskingCoach || !coachQuestion.trim()}
+                    onClick={submitCoachQuestion}
+                    size="sm"
+                  >
+                    {isAskingCoach ? "Asking..." : "Ask"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </section>
         </section>
       </div>
@@ -394,6 +471,48 @@ function formatAction(action: string) {
 
 function positionBadgeVariant(position: string): "default" | "secondary" {
   return position === "BTN" || position === "SB" || position === "BB" ? "default" : "secondary"
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const blocks = text.split(/\n{2,}/).filter(Boolean)
+
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, index) => {
+        const lines = block.split("\n").filter(Boolean)
+        const isList = lines.every((line) => /^[-*]\s+/.test(line.trim()))
+        if (isList) {
+          return (
+            <ul className="list-disc space-y-1 pl-5" key={index}>
+              {lines.map((line, lineIndex) => (
+                <li key={lineIndex}>{renderInlineMarkdown(line.replace(/^[-*]\s+/, ""))}</li>
+              ))}
+            </ul>
+          )
+        }
+
+        return <p key={index}>{renderInlineMarkdown(lines.join(" "))}</p>
+      })}
+    </div>
+  )
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return (
+        <code className="rounded bg-background px-1 py-0.5 text-[0.92em]" key={index}>
+          {part.slice(1, -1)}
+        </code>
+      )
+    }
+    return part
+  })
 }
 
 export default App
