@@ -1,9 +1,10 @@
 import asyncio
 import random
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from apps.poker_engine.engine import apply_action, legal_actions
+from apps.poker_engine.engine import annotate_latest_player_action, apply_action, legal_actions
 from apps.poker_engine.evaluator import RANK_VALUE
 from apps.poker_engine.llm import LLMProviderUnavailable, PokerLLMProvider, validate_llm_decision
 
@@ -137,7 +138,7 @@ def advance_bots_until_human_turn(state: dict, *, max_actions: int = 100) -> dic
             action=decision["action"],
             amount=decision.get("amount"),
         )
-        _annotate_latest_action(next_state, source="rule_bot")
+        annotate_latest_player_action(next_state, seat_id=seat["seat"], source="rule_bot")
 
     raise RuntimeError("Bot action loop exceeded max_actions.")
 
@@ -147,6 +148,8 @@ async def advance_bots_until_human_turn_async(
     *,
     llm_provider: PokerLLMProvider | None = None,
     max_actions: int = 100,
+    on_update: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_thinking: Callable[[int], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     next_state = state
     for _ in range(max_actions):
@@ -156,6 +159,13 @@ async def advance_bots_until_human_turn_async(
         if seat["seat"] == HERO_SEAT or seat["role"] != "bot":
             return next_state
 
+        if (
+            next_state.get("llm_bots_enabled")
+            and llm_provider is not None
+            and on_thinking is not None
+        ):
+            await on_thinking(seat["seat"])
+
         decision, source = await _choose_bot_action_async(next_state, seat["seat"], llm_provider)
         next_state = apply_action(
             next_state,
@@ -163,7 +173,9 @@ async def advance_bots_until_human_turn_async(
             action=decision["action"],
             amount=decision.get("amount"),
         )
-        _annotate_latest_action(next_state, source=source)
+        annotate_latest_player_action(next_state, seat_id=seat["seat"], source=source)
+        if on_update is not None:
+            await on_update(next_state)
 
     raise RuntimeError("Bot action loop exceeded max_actions.")
 
@@ -206,11 +218,6 @@ async def _choose_bot_action_async(
     personality = state["seats"][seat_id].get("personality", "fish")
     strategy = STRATEGIES.get(personality, STRATEGIES["fish"])
     return strategy.choose_action(state, seat_id), fallback_source
-
-
-def _annotate_latest_action(state: dict[str, Any], *, source: str) -> None:
-    if state["hand_history"]:
-        state["hand_history"][-1]["source"] = source
 
 
 def _actions_by_name(state: dict) -> dict:

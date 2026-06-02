@@ -10,7 +10,7 @@ from apps.poker_engine.llm import PokerLLMProvider
 from apps.tables.models import GameSession
 
 
-def build_initial_table_state(
+def build_dealt_table_state(
     difficulty: str,
     seed: str | None = None,
     *,
@@ -24,6 +24,22 @@ def build_initial_table_state(
     )
     state = assign_bot_personalities(state, difficulty)
     state["llm_bots_enabled"] = llm_bots_enabled
+    return state
+
+
+def build_initial_table_state(
+    difficulty: str,
+    seed: str | None = None,
+    *,
+    llm_bots_enabled: bool = False,
+    button_seat: int = 0,
+) -> dict:
+    state = build_dealt_table_state(
+        difficulty=difficulty,
+        seed=seed or str(uuid.uuid4()),
+        llm_bots_enabled=llm_bots_enabled,
+        button_seat=button_seat,
+    )
     return advance_bots_until_human_turn(state)
 
 
@@ -35,13 +51,12 @@ async def build_initial_table_state_async(
     llm_provider: PokerLLMProvider | None = None,
     button_seat: int = 0,
 ) -> dict:
-    state = create_hand(
+    state = build_dealt_table_state(
         difficulty=difficulty,
         seed=seed or str(uuid.uuid4()),
+        llm_bots_enabled=llm_bots_enabled,
         button_seat=button_seat,
     )
-    state = assign_bot_personalities(state, difficulty)
-    state["llm_bots_enabled"] = llm_bots_enabled
     if llm_bots_enabled:
         return await advance_bots_until_human_turn_async(state, llm_provider=llm_provider)
     return advance_bots_until_human_turn(state)

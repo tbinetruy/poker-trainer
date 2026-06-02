@@ -196,6 +196,18 @@ def visible_state(state: dict[str, Any], *, hero_seat: int = 0) -> dict[str, Any
     return visible
 
 
+def annotate_latest_player_action(
+    state: dict[str, Any],
+    *,
+    seat_id: int,
+    source: str,
+) -> None:
+    for event in reversed(state["hand_history"]):
+        if event.get("seat") == seat_id:
+            event["source"] = source
+            return
+
+
 def _advance_after_action(state: dict[str, Any], acted_seat: int) -> None:
     remaining = [seat for seat in state["seats"] if seat["status"] != "folded"]
     if len(remaining) == 1:

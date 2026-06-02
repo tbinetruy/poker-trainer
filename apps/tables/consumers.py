@@ -42,5 +42,8 @@ class TableConsumer(AsyncJsonWebsocketConsumer):
     async def table_snapshot(self, event: dict) -> None:
         await self.send_json({"type": "table.snapshot", "payload": event["payload"]})
 
+    async def table_thinking(self, event: dict) -> None:
+        await self.send_json({"type": "table.thinking", "payload": event["payload"]})
+
     async def decode_json(self, text_data: str) -> dict:
         return json.loads(text_data)

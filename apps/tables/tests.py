@@ -7,7 +7,7 @@ from channels.testing import WebsocketCommunicator
 from django.test import AsyncClient
 from django.urls import path, reverse
 
-from apps.poker_engine.llm import CodexCLIPokerProvider, LLMProviderUnavailable
+from apps.poker_engine.llm import CodexCLIPokerProvider
 from apps.tables.consumers import TableConsumer
 from apps.tables.models import GameSession
 from apps.tables.services import create_game_session
@@ -54,15 +54,16 @@ def test_create_game_endpoint_returns_session() -> None:
 @pytest.mark.django_db(transaction=True)
 def test_create_game_endpoint_can_enable_llm_bots(monkeypatch) -> None:
     class Provider:
-        def __init__(self):
-            self.calls = []
-
         async def choose_action(self, state, seat_id):
-            self.calls.append(seat_id)
             return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "continue"}
 
     provider = Provider()
+    scheduled = []
     monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: provider)
+    monkeypatch.setattr(
+        "apps.tables.views._schedule_bot_advance",
+        lambda game_id, llm_provider: scheduled.append((game_id, llm_provider)),
+    )
     client = AsyncClient()
     response = async_to_sync(client.post)(
         reverse("game-list"),
@@ -72,8 +73,9 @@ def test_create_game_endpoint_can_enable_llm_bots(monkeypatch) -> None:
 
     assert response.status_code == 201
     assert response.json()["table_state"]["llm_bots_enabled"] is True
-    assert response.json()["table_state"]["to_act"] == 0
-    assert provider.calls == [3, 4]
+    assert response.json()["table_state"]["to_act"] == 3
+    assert len(scheduled) == 1
+    assert scheduled[0][1] is provider
 
 
 @pytest.mark.django_db(transaction=True)
@@ -91,6 +93,33 @@ def test_create_game_endpoint_rejects_llm_bots_when_unconfigured(monkeypatch) ->
     assert GameSession.objects.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
+def test_background_bot_advance_persists_llm_actions() -> None:
+    from apps.tables.services import build_dealt_table_state
+    from apps.tables.views import _advance_game_bots
+
+    class Provider:
+        async def choose_action(self, state, seat_id):
+            return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "continue"}
+
+    game = GameSession.objects.create(
+        difficulty=GameSession.Difficulty.BEGINNER,
+        status=GameSession.Status.ACTIVE,
+        table_state=build_dealt_table_state(
+            GameSession.Difficulty.BEGINNER,
+            seed="background-advance",
+            llm_bots_enabled=True,
+        ),
+    )
+
+    async_to_sync(_advance_game_bots)(game.id, Provider(), startup_delay=0)
+
+    game.refresh_from_db()
+    assert game.table_state["to_act"] == 0
+    assert game.table_state["hand_history"][-2]["source"] == "llm"
+    assert game.table_state["hand_history"][-1]["source"] == "llm"
+
+
 def test_default_llm_provider_uses_codex_cli(settings, tmp_path) -> None:
     from apps.tables.llm import get_default_llm_provider
 
@@ -105,22 +134,36 @@ def test_default_llm_provider_uses_codex_cli(settings, tmp_path) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_game_endpoint_rejects_unauthorized_llm_provider(monkeypatch) -> None:
-    async def build_state(*args, **kwargs):
-        raise LLMProviderUnavailable("LLM opponents are not authorized.")
+def test_background_bot_advance_records_unauthorized_llm_provider() -> None:
+    from apps.tables.services import build_dealt_table_state
+    from apps.tables.views import _advance_game_bots
 
-    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: object())
-    monkeypatch.setattr("apps.tables.views.build_initial_table_state_async", build_state)
-    client = AsyncClient()
-    response = async_to_sync(client.post)(
-        reverse("game-list"),
-        data={"difficulty": "beginner", "llm_bots": True},
-        content_type="application/json",
+    class Response:
+        status_code = 401
+
+    class UnauthorizedError(Exception):
+        response = Response()
+
+    class Provider:
+        async def choose_action(self, state, seat_id):
+            raise UnauthorizedError
+
+    game = GameSession.objects.create(
+        difficulty=GameSession.Difficulty.BEGINNER,
+        status=GameSession.Status.ACTIVE,
+        table_state=build_dealt_table_state(
+            GameSession.Difficulty.BEGINNER,
+            seed="background-auth-error",
+            llm_bots_enabled=True,
+        ),
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "LLM opponents are not authorized."
-    assert GameSession.objects.count() == 0
+    async_to_sync(_advance_game_bots)(game.id, Provider(), startup_delay=0)
+
+    game.refresh_from_db()
+    assert game.table_state["llm_bot_errors"] == [
+        {"seat": 3, "error": "LLM opponents are not authorized for the Responses API."}
+    ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -155,6 +198,10 @@ def test_game_action_endpoint_applies_hero_action() -> None:
     assert payload["table_state"]["to_act"] == 0
     hero_actions = [event for event in payload["table_state"]["hand_history"] if event["seat"] == 0]
     assert hero_actions[-1]["source"] == "human"
+    dealer_events = [
+        event for event in payload["table_state"]["hand_history"] if event["seat"] is None
+    ]
+    assert "source" not in dealer_events[-1]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -323,6 +370,35 @@ def test_table_socket_sends_snapshot_for_existing_game() -> None:
         message = await communicator.receive_json_from()
         assert message["type"] == "table.snapshot"
         assert message["payload"]["id"] == str(game.id)
+        await communicator.disconnect()
+
+    async_to_sync(run_test)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_table_socket_forwards_thinking_events() -> None:
+    from channels.layers import get_channel_layer
+
+    game = create_game_session(GameSession.Difficulty.BEGINNER)
+
+    async def run_test() -> None:
+        communicator = WebsocketCommunicator(
+            URLRouter([path("ws/tables/<uuid:game_id>/", TableConsumer.as_asgi())]),
+            f"/ws/tables/{game.id}/",
+        )
+
+        connected, _ = await communicator.connect()
+        assert connected is True
+        await communicator.receive_json_from()
+
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            f"table-{game.id}",
+            {"type": "table.thinking", "payload": {"seat": 2}},
+        )
+
+        message = await communicator.receive_json_from()
+        assert message == {"type": "table.thinking", "payload": {"seat": 2}}
         await communicator.disconnect()
 
     async_to_sync(run_test)()

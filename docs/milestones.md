@@ -34,6 +34,8 @@
   discipline, river bluff-catching, and exploitative adjustments.
 - Action-source audit trail showing human actions, LLM decisions, and deterministic
   fallback reasons.
+- Realtime table updates while LLM opponents think and act, including per-seat thinking
+  indicators and intermediate snapshots after each action.
 
 ## 5. In-Hand AI Coach
 

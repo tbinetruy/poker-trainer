@@ -400,6 +400,38 @@ def test_async_bot_uses_llm_for_all_available_bot_actions() -> None:
     assert state["hand_history"][-1]["source"] == "llm"
 
 
+def test_async_bot_emits_thinking_and_update_callbacks() -> None:
+    class Provider:
+        async def choose_action(self, state, seat_id):
+            return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "continue"}
+
+    thinking_seats = []
+    update_sources = []
+
+    async def on_thinking(seat_id):
+        thinking_seats.append(seat_id)
+
+    async def on_update(state):
+        update_sources.append(state["hand_history"][-1].get("source"))
+
+    state = assign_bot_personalities(
+        create_hand(difficulty="beginner", seed="llm-callbacks"),
+        "beginner",
+    )
+    state["llm_bots_enabled"] = True
+
+    state = async_to_sync(advance_bots_until_human_turn_async)(
+        state,
+        llm_provider=Provider(),
+        on_thinking=on_thinking,
+        on_update=on_update,
+    )
+
+    assert thinking_seats == [3, 4]
+    assert update_sources == ["llm", "llm"]
+    assert state["to_act"] == 0
+
+
 def test_async_bot_falls_back_when_llm_decision_is_invalid() -> None:
     class Provider:
         max_decisions_per_advance = 10

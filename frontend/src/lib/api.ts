@@ -2,6 +2,15 @@ import type { Difficulty, GameReview, GameSession } from "@/lib/types"
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
 
+export function tableWebSocketUrl(gameId: string) {
+  const apiUrl = new URL(API_BASE_URL, window.location.origin)
+  apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:"
+  apiUrl.pathname = `/ws/tables/${gameId}/`
+  apiUrl.search = ""
+  apiUrl.hash = ""
+  return apiUrl.toString()
+}
+
 export async function createGame(difficulty: Difficulty, llmBots = false): Promise<GameSession> {
   const response = await fetch(`${API_BASE_URL}/api/games/`, {
     method: "POST",

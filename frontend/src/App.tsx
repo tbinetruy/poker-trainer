@@ -1,11 +1,13 @@
 import { Bot, Brain, Eye, Radio, Spade, ToggleRight, Users } from "lucide-react"
-import { useState } from "react"
+import { useCallback, useState } from "react"
 
 import { applyGameAction, askCoach, createGame, getGameReview } from "@/lib/api"
 import type { Difficulty, GameReview, GameSession, LegalAction } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useTableSocket } from "@/hooks/use-table-socket"
+import { cn } from "@/lib/utils"
 
 const difficulties: Array<{ value: Difficulty; label: string; detail: string }> = [
   { value: "beginner", label: "Beginner", detail: "Mostly loose and passive opponents" },
@@ -31,7 +33,15 @@ function App() {
   const [isActing, setIsActing] = useState(false)
   const [isAskingCoach, setIsAskingCoach] = useState(false)
   const [isRevealingReview, setIsRevealingReview] = useState(false)
+  const [thinkingSeat, setThinkingSeat] = useState<number | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
+
+  const handleSocketSnapshot = useCallback((snapshot: GameSession) => {
+    setGame(snapshot)
+    setGameReview((current) => (current?.game_id === snapshot.id ? current : null))
+  }, [])
+
+  useTableSocket(game?.id ?? null, handleSocketSnapshot, setThinkingSeat)
 
   const startGame = async () => {
     setIsStarting(true)
@@ -42,6 +52,7 @@ function App() {
       setGameReview(null)
       setCoachMessages([])
       setCoachQuestion("")
+      setThinkingSeat(null)
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to start game.")
     } finally {
@@ -76,6 +87,7 @@ function App() {
     } catch (error) {
       setStartError(error instanceof Error ? error.message : "Failed to apply action.")
     } finally {
+      setThinkingSeat(null)
       setIsActing(false)
     }
   }
@@ -233,10 +245,16 @@ function App() {
               <Badge>{game?.status ?? "idle"}</Badge>
             </div>
 
+            {game && thinkingSeat !== null ? (
+              <div className="mb-3 rounded-md border border-primary/20 bg-primary/8 px-3 py-2 text-sm text-muted-foreground">
+                {seatName(game, thinkingSeat)} thinking...
+              </div>
+            ) : null}
+
             <div className="min-h-[420px] rounded-md bg-[radial-gradient(circle_at_center,hsl(156_42%_28%),hsl(156_45%_16%))] p-5 text-white">
               <div className="grid gap-3 md:grid-cols-5">
                 {(game?.table_state.seats ?? []).map((seat) => (
-                  <SeatPanel key={seat.seat} seat={seat} />
+                  <SeatPanel isThinking={thinkingSeat === seat.seat} key={seat.seat} seat={seat} />
                 ))}
               </div>
               <div className="mt-4 rounded-md border border-white/15 bg-black/25 p-3">
@@ -493,9 +511,20 @@ function winnerText(game: GameSession) {
     .join(", ")}`
 }
 
-function SeatPanel({ seat }: { seat: GameSession["table_state"]["seats"][number] }) {
+function SeatPanel({
+  isThinking,
+  seat,
+}: {
+  isThinking: boolean
+  seat: GameSession["table_state"]["seats"][number]
+}) {
   return (
-    <div className="rounded-md border border-white/15 bg-black/30 p-3 text-center shadow-lg">
+    <div
+      className={cn(
+        "rounded-md border border-white/15 bg-black/30 p-3 text-center shadow-lg",
+        isThinking && "border-white/60 bg-black/45 ring-2 ring-white/30",
+      )}
+    >
       <div className="mb-2 flex items-center justify-center gap-1">
         {seat.role === "human" ? <Users className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
         <Badge variant={positionBadgeVariant(seat.position)}>{seat.position}</Badge>
@@ -521,10 +550,14 @@ function SeatPanel({ seat }: { seat: GameSession["table_state"]["seats"][number]
         <span>In {seat.committed.toLocaleString()}</span>
       </div>
       <Badge className="mt-2" variant={seat.status === "active" ? "secondary" : "outline"}>
-        {seat.status}
+        {isThinking ? "thinking" : seat.status}
       </Badge>
     </div>
   )
+}
+
+function seatName(game: GameSession, seatId: number) {
+  return game.table_state.seats.find((seat) => seat.seat === seatId)?.name ?? `Seat ${seatId}`
 }
 
 function ReviewSeatPanel({ seat }: { seat: GameReview["seats"][number] }) {
