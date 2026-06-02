@@ -15,6 +15,7 @@ from apps.poker_engine.bots import (
 from apps.poker_engine.engine import InvalidAction, _showdown
 from apps.poker_engine.evaluator import evaluate_seven
 from apps.poker_engine.llm import (
+    PERSONALITY_PROMPTS,
     CodexCLIPokerProvider,
     LLMProviderUnavailable,
     OpenAIResponsesPokerProvider,
@@ -209,8 +210,15 @@ def test_difficulty_presets_assign_private_personalities() -> None:
     assert [seat["personality"] for seat in advanced["seats"][1:]] == BOT_PERSONALITY_POOLS[
         "advanced"
     ]
-    assert "pro" not in [seat["personality"] for seat in beginner["seats"][1:]]
-    assert "pro" in [seat["personality"] for seat in medium["seats"][1:]]
+    assert not any(seat["personality"].startswith("pro") for seat in beginner["seats"][1:])
+    assert "pro_tag" in [seat["personality"] for seat in medium["seats"][1:]]
+    assert [seat["personality"] for seat in advanced["seats"][1:]] == [
+        "pro_tag",
+        "pro_lag",
+        "pro_exploit",
+        "pro_balanced",
+    ]
+    assert all(seat["personality"] in PERSONALITY_PROMPTS for seat in advanced["seats"][1:])
 
 
 def test_bots_auto_advance_until_hero_turn() -> None:
@@ -224,6 +232,7 @@ def test_bots_auto_advance_until_hero_turn() -> None:
     assert state["to_act"] == 0
     assert state["status"] == "active"
     assert [event["seat"] for event in state["hand_history"][-2:]] == [3, 4]
+    assert [event["source"] for event in state["hand_history"][-2:]] == ["rule_bot", "rule_bot"]
 
 
 def test_random_bot_is_deterministic_for_same_state() -> None:
@@ -273,12 +282,15 @@ def test_llm_decision_context_only_reveals_acting_bot_private_information() -> N
 
     assert context["acting_player"]["hole_cards"] == state["seats"][3]["hole_cards"]
     assert context["acting_player"]["personality"] == state["seats"][3]["personality"]
+    assert context["acting_player"]["personality"] == "pro_exploit"
     assert context["table"]["seats"][3]["hole_cards"] == state["seats"][3]["hole_cards"]
     assert context["table"]["seats"][0]["hole_cards"] == []
     assert context["table"]["seats"][1]["hole_cards"] == []
     assert "deck" not in context
     assert "seed" not in context
     assert "personality" not in context["table"]["seats"][1]
+    assert any("multiway pots" in item for item in context["decision_process"])
+    assert any("loose-passive callers" in item for item in context["decision_process"])
 
 
 def test_hero_advice_context_only_reveals_hero_private_information() -> None:
@@ -359,13 +371,13 @@ def test_async_bot_uses_valid_llm_decision() -> None:
 
     assert state["hand_history"][-2]["action"] == "call"
     assert state["hand_history"][-1]["action"] == "call"
+    assert state["hand_history"][-2]["source"] == "llm"
+    assert state["hand_history"][-1]["source"] == "llm"
     assert state["to_act"] == 0
 
 
-def test_async_bot_respects_llm_decision_limit() -> None:
+def test_async_bot_uses_llm_for_all_available_bot_actions() -> None:
     class Provider:
-        max_decisions_per_advance = 1
-
         def __init__(self):
             self.calls = 0
 
@@ -382,8 +394,10 @@ def test_async_bot_respects_llm_decision_limit() -> None:
 
     state = async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=provider)
 
-    assert provider.calls == 1
+    assert provider.calls == 2
     assert state["to_act"] == 0
+    assert state["hand_history"][-2]["source"] == "llm"
+    assert state["hand_history"][-1]["source"] == "llm"
 
 
 def test_async_bot_falls_back_when_llm_decision_is_invalid() -> None:
@@ -403,6 +417,8 @@ def test_async_bot_falls_back_when_llm_decision_is_invalid() -> None:
 
     assert state["hand_history"][-2]["action"] == "call"
     assert state["hand_history"][-1]["action"] == "call"
+    assert state["hand_history"][-2]["source"] == "rule_fallback_invalid_llm"
+    assert state["hand_history"][-1]["source"] == "rule_fallback_invalid_llm"
     assert state["to_act"] == 0
     assert state["llm_bot_errors"] == [
         {"seat": 3, "error": "InvalidLLMDecision"},
@@ -435,6 +451,8 @@ def test_async_bot_falls_back_when_llm_times_out(monkeypatch) -> None:
     state = async_to_sync(advance_bots_until_human_turn_async)(state, llm_provider=Provider())
 
     assert state["to_act"] == 0
+    assert state["hand_history"][-2]["source"] == "rule_fallback_timeout"
+    assert state["hand_history"][-1]["source"] == "rule_fallback_timeout"
     assert state["llm_bot_errors"] == [
         {"seat": 3, "error": "TimeoutError"},
         {"seat": 4, "error": "TimeoutError"},

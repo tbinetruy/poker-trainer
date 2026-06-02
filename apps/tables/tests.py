@@ -54,10 +54,15 @@ def test_create_game_endpoint_returns_session() -> None:
 @pytest.mark.django_db(transaction=True)
 def test_create_game_endpoint_can_enable_llm_bots(monkeypatch) -> None:
     class Provider:
+        def __init__(self):
+            self.calls = []
+
         async def choose_action(self, state, seat_id):
+            self.calls.append(seat_id)
             return {"action": "call", "amount": 100, "confidence": 0.8, "rationale": "continue"}
 
-    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: Provider())
+    provider = Provider()
+    monkeypatch.setattr("apps.tables.views.get_default_llm_provider", lambda: provider)
     client = AsyncClient()
     response = async_to_sync(client.post)(
         reverse("game-list"),
@@ -68,6 +73,7 @@ def test_create_game_endpoint_can_enable_llm_bots(monkeypatch) -> None:
     assert response.status_code == 201
     assert response.json()["table_state"]["llm_bots_enabled"] is True
     assert response.json()["table_state"]["to_act"] == 0
+    assert provider.calls == [3, 4]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -147,6 +153,8 @@ def test_game_action_endpoint_applies_hero_action() -> None:
     assert payload["table_state"]["seats"][0]["stack"] == 9_900
     assert payload["table_state"]["street"] == "flop"
     assert payload["table_state"]["to_act"] == 0
+    hero_actions = [event for event in payload["table_state"]["hand_history"] if event["seat"] == 0]
+    assert hero_actions[-1]["source"] == "human"
 
 
 @pytest.mark.django_db(transaction=True)

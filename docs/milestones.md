@@ -28,6 +28,12 @@
 - Strict visible-state serializer per acting player.
 - Structured JSON action responses.
 - Backend legality validation and deterministic fallback for invalid LLM actions.
+- Calibrated pro archetypes (`pro_tag`, `pro_lag`, `pro_exploit`, `pro_balanced`) for
+  stronger, more varied advanced tables.
+- Decision-process guardrails for LLM opponents covering pot odds, SPR, multiway
+  discipline, river bluff-catching, and exploitative adjustments.
+- Action-source audit trail showing human actions, LLM decisions, and deterministic
+  fallback reasons.
 
 ## 5. In-Hand AI Coach
 
@@ -45,7 +51,8 @@
 ## 7. Training Tools
 
 - Spot replay from decision points.
+- Fold-flow modal to choose whether to stop the hand, continue with LLM opponents, or
+  reveal immediately.
 - Pot odds and sizing helpers.
 - Range/equity visualizations.
 - Filters for common study spots.
-

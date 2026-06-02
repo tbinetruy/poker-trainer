@@ -8,8 +8,8 @@ from apps.poker_engine.evaluator import RANK_VALUE
 from apps.poker_engine.llm import LLMProviderUnavailable, PokerLLMProvider, validate_llm_decision
 
 BEGINNER_POOL = ["fish", "fish", "fish", "tight"]
-MEDIUM_POOL = ["fish", "tight", "tag", "pro"]
-ADVANCED_POOL = ["tag", "pro", "pro", "pro"]
+MEDIUM_POOL = ["fish", "tight", "tag", "pro_tag"]
+ADVANCED_POOL = ["pro_tag", "pro_lag", "pro_exploit", "pro_balanced"]
 BOT_PERSONALITY_POOLS = {
     "beginner": BEGINNER_POOL,
     "medium": MEDIUM_POOL,
@@ -101,6 +101,10 @@ STRATEGIES: dict[str, BotStrategy] = {
     "tight": RuleBasedTight(),
     "tag": RuleBasedTag(),
     "pro": RuleBasedPro(),
+    "pro_tag": RuleBasedPro(),
+    "pro_lag": RuleBasedPro(),
+    "pro_exploit": RuleBasedPro(),
+    "pro_balanced": RuleBasedPro(),
 }
 
 
@@ -133,6 +137,7 @@ def advance_bots_until_human_turn(state: dict, *, max_actions: int = 100) -> dic
             action=decision["action"],
             amount=decision.get("amount"),
         )
+        _annotate_latest_action(next_state, source="rule_bot")
 
     raise RuntimeError("Bot action loop exceeded max_actions.")
 
@@ -144,8 +149,6 @@ async def advance_bots_until_human_turn_async(
     max_actions: int = 100,
 ) -> dict[str, Any]:
     next_state = state
-    llm_decisions_used = 0
-    max_llm_decisions = getattr(llm_provider, "max_decisions_per_advance", max_actions)
     for _ in range(max_actions):
         if next_state["status"] == "complete" or next_state["to_act"] is None:
             return next_state
@@ -153,16 +156,14 @@ async def advance_bots_until_human_turn_async(
         if seat["seat"] == HERO_SEAT or seat["role"] != "bot":
             return next_state
 
-        action_provider = llm_provider if llm_decisions_used < max_llm_decisions else None
-        decision = await _choose_bot_action_async(next_state, seat["seat"], action_provider)
-        if action_provider is not None:
-            llm_decisions_used += 1
+        decision, source = await _choose_bot_action_async(next_state, seat["seat"], llm_provider)
         next_state = apply_action(
             next_state,
             seat_id=seat["seat"],
             action=decision["action"],
             amount=decision.get("amount"),
         )
+        _annotate_latest_action(next_state, source=source)
 
     raise RuntimeError("Bot action loop exceeded max_actions.")
 
@@ -171,7 +172,7 @@ async def _choose_bot_action_async(
     state: dict[str, Any],
     seat_id: int,
     llm_provider: PokerLLMProvider | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     if state.get("llm_bots_enabled") and llm_provider is not None:
         try:
             timeout = getattr(llm_provider, "decision_timeout", 8)
@@ -179,10 +180,11 @@ async def _choose_bot_action_async(
                 decision = await llm_provider.choose_action(state, seat_id)
             validated = validate_llm_decision(decision, state)
             if validated is not None:
-                return validated
+                return validated, "llm"
             state.setdefault("llm_bot_errors", []).append(
                 {"seat": seat_id, "error": "InvalidLLMDecision"}
             )
+            fallback_source = "rule_fallback_invalid_llm"
         except Exception as error:
             if _is_llm_auth_error(error):
                 raise LLMProviderUnavailable(
@@ -191,10 +193,24 @@ async def _choose_bot_action_async(
             state.setdefault("llm_bot_errors", []).append(
                 {"seat": seat_id, "error": error.__class__.__name__}
             )
+            fallback_source = (
+                "rule_fallback_timeout"
+                if isinstance(error, TimeoutError)
+                else "rule_fallback_error"
+            )
+    elif state.get("llm_bots_enabled"):
+        fallback_source = "rule_fallback_no_provider"
+    else:
+        fallback_source = "rule_bot"
 
     personality = state["seats"][seat_id].get("personality", "fish")
     strategy = STRATEGIES.get(personality, STRATEGIES["fish"])
-    return strategy.choose_action(state, seat_id)
+    return strategy.choose_action(state, seat_id), fallback_source
+
+
+def _annotate_latest_action(state: dict[str, Any], *, source: str) -> None:
+    if state["hand_history"]:
+        state["hand_history"][-1]["source"] = source
 
 
 def _actions_by_name(state: dict) -> dict:

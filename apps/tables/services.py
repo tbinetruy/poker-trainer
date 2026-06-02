@@ -43,8 +43,8 @@ async def build_initial_table_state_async(
     state = assign_bot_personalities(state, difficulty)
     state["llm_bots_enabled"] = llm_bots_enabled
     if llm_bots_enabled:
-        return advance_bots_until_human_turn(state)
-    return await advance_bots_until_human_turn_async(state, llm_provider=llm_provider)
+        return await advance_bots_until_human_turn_async(state, llm_provider=llm_provider)
+    return advance_bots_until_human_turn(state)
 
 
 def create_game_session(difficulty: str) -> GameSession:

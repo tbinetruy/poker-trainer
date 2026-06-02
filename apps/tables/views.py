@@ -109,6 +109,7 @@ async def game_action(request: HttpRequest, game_id) -> JsonResponse:
                 action=str(payload.get("action", "")),
                 amount=amount,
             )
+            game.table_state["hand_history"][-1]["source"] = "human"
             llm_provider = (
                 get_default_llm_provider() if game.table_state.get("llm_bots_enabled") else None
             )

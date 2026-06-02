@@ -37,8 +37,53 @@ PERSONALITY_PROMPTS = {
     "fish": "Loose-passive beginner. Over-calls, under-bluffs, and uses simple hand strength.",
     "tight": "Tight and cautious. Plays fewer hands and avoids marginal high-variance spots.",
     "tag": "Tight-aggressive regular. Applies pressure with playable ranges and value bets.",
-    "pro": "Strong range-based player. Balances value, bluffs, blockers, pot odds, and position.",
+    "pro": (
+        "Strong modern range-based player. Uses position, pot odds, SPR, board texture, "
+        "range advantage, nut advantage, blockers, and visible opponent tendencies. Plays "
+        "tighter and more value-heavy in multiway pots, folds weak bluff-catchers when ranges "
+        "and sizing are unfavorable, and avoids low-equity multi-street bluffs against callers."
+    ),
+    "pro_tag": (
+        "Strong tight-aggressive regular. Enters pots with disciplined ranges, pressures capped "
+        "ranges, value-bets efficiently, and avoids dominated trash. In multiway pots, plays more "
+        "straightforwardly and requires stronger equity to continue."
+    ),
+    "pro_lag": (
+        "Strong loose-aggressive regular. Opens and attacks wider in position, applies pressure "
+        "with blockers and backdoor equity, but does not call down weakly. Bluffs selectively "
+        "when fold equity is credible and gives up more often versus sticky opponents."
+    ),
+    "pro_exploit": (
+        "Strong exploitative pro. Actively adjusts to public tendencies. Value-bets thinly "
+        "against loose callers, bluffs less against stations, attacks tight folders, and avoids "
+        "balanced plays when an exploit is clearer."
+    ),
+    "pro_balanced": (
+        "Strong balanced pro. Thinks in ranges, equity realization, nut advantage, blockers, and "
+        "minimum defense frequency. Uses mixed sizing concepts without forcing fancy plays, and "
+        "keeps river calls and bluffs disciplined by pot odds and range interaction."
+    ),
 }
+
+BASE_DECISION_PROCESS = [
+    "Choose only from legal_actions; legality, pot accounting, and showdown are deterministic.",
+    "Classify the current hand as value, showdown value, draw, or air.",
+    "Use pot odds, stack-to-pot ratio, position, board texture, and number of opponents.",
+    "Treat multiway pots as stronger ranges; continue and bluff with more discipline.",
+    (
+        "Do not call river bets with weak high-card hands unless pot odds and blockers clearly "
+        "justify it."
+    ),
+    "Pick bet and raise sizes that match the plan: value, protection, bluff, or pot-control.",
+]
+
+PRO_DECISION_PROCESS = [
+    "Estimate range advantage and nut advantage before betting or raising.",
+    "Prefer thin value and fewer bluffs against loose-passive callers.",
+    "Apply more pressure to capped or over-folding ranges, especially in position.",
+    "Avoid low-equity multi-street bluffs in multiway pots or against sticky opponents.",
+    "Fold weak bluff-catchers when the opponent's line and sizing are under-bluffed.",
+]
 
 
 class PokerLLMProvider(Protocol):
@@ -196,7 +241,6 @@ class CodexCLIPokerProvider:
     command: str = "codex"
     model: str | None = None
     decision_timeout: float = 20.0
-    max_decisions_per_advance: int = 1
 
     async def choose_action(self, state: dict[str, Any], seat_id: int) -> dict[str, Any]:
         context = build_llm_decision_context(state, seat_id)
@@ -320,6 +364,9 @@ class CodexCLIPokerProvider:
 def build_llm_decision_context(state: dict[str, Any], seat_id: int) -> dict[str, Any]:
     acting_seat = state["seats"][seat_id]
     personality = acting_seat.get("personality", "fish")
+    decision_process = list(BASE_DECISION_PROCESS)
+    if personality.startswith("pro"):
+        decision_process.extend(PRO_DECISION_PROCESS)
     return {
         "game": {
             "variant": state["variant"],
@@ -356,6 +403,7 @@ def build_llm_decision_context(state: dict[str, Any], seat_id: int) -> dict[str,
             ],
         },
         "legal_actions": legal_actions(state),
+        "decision_process": decision_process,
         "hand_history": list(state["hand_history"]),
     }
 
