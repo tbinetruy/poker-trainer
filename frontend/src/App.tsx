@@ -15,6 +15,265 @@ const difficulties: Array<{ value: Difficulty; label: string; detail: string }> 
   { value: "advanced", label: "Advanced", detail: "Tougher table, fewer obvious leaks" },
 ]
 
+const rangeRanks = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"] as const
+
+const preflopRanges = [
+  {
+    position: "UTG",
+    detail: "First in",
+    hands: makeRange([
+      "AA",
+      "KK",
+      "QQ",
+      "JJ",
+      "TT",
+      "99",
+      "88",
+      "77",
+      "66",
+      "55",
+      "AKs",
+      "AQs",
+      "AJs",
+      "ATs",
+      "KQs",
+      "KJs",
+      "KTs",
+      "QJs",
+      "QTs",
+      "JTs",
+      "T9s",
+      "AKo",
+      "AQo",
+      "AJo",
+      "KQo",
+    ]),
+  },
+  {
+    position: "CO",
+    detail: "First in",
+    hands: makeRange([
+      "AA",
+      "KK",
+      "QQ",
+      "JJ",
+      "TT",
+      "99",
+      "88",
+      "77",
+      "66",
+      "55",
+      "44",
+      "AKs",
+      "AQs",
+      "AJs",
+      "ATs",
+      "A9s",
+      "A8s",
+      "KQs",
+      "KJs",
+      "KTs",
+      "K9s",
+      "QJs",
+      "QTs",
+      "Q9s",
+      "JTs",
+      "J9s",
+      "T9s",
+      "98s",
+      "AKo",
+      "AQo",
+      "AJo",
+      "ATo",
+      "KQo",
+      "KJo",
+      "QJo",
+    ]),
+  },
+  {
+    position: "BTN",
+    detail: "First in",
+    hands: makeRange([
+      "AA",
+      "KK",
+      "QQ",
+      "JJ",
+      "TT",
+      "99",
+      "88",
+      "77",
+      "66",
+      "55",
+      "44",
+      "33",
+      "22",
+      "AKs",
+      "AQs",
+      "AJs",
+      "ATs",
+      "A9s",
+      "A8s",
+      "A7s",
+      "A6s",
+      "A5s",
+      "A4s",
+      "A3s",
+      "A2s",
+      "KQs",
+      "KJs",
+      "KTs",
+      "K9s",
+      "K8s",
+      "K7s",
+      "QJs",
+      "QTs",
+      "Q9s",
+      "Q8s",
+      "JTs",
+      "J9s",
+      "J8s",
+      "T9s",
+      "T8s",
+      "98s",
+      "87s",
+      "76s",
+      "65s",
+      "AKo",
+      "AQo",
+      "AJo",
+      "ATo",
+      "A9o",
+      "A8o",
+      "KQo",
+      "KJo",
+      "KTo",
+      "QJo",
+      "QTo",
+      "JTo",
+    ]),
+  },
+  {
+    position: "SB",
+    detail: "Open",
+    hands: makeRange([
+      "AA",
+      "KK",
+      "QQ",
+      "JJ",
+      "TT",
+      "99",
+      "88",
+      "77",
+      "66",
+      "55",
+      "44",
+      "33",
+      "22",
+      "AKs",
+      "AQs",
+      "AJs",
+      "ATs",
+      "A9s",
+      "A8s",
+      "A7s",
+      "A6s",
+      "A5s",
+      "A4s",
+      "A3s",
+      "A2s",
+      "KQs",
+      "KJs",
+      "KTs",
+      "K9s",
+      "K8s",
+      "QJs",
+      "QTs",
+      "Q9s",
+      "JTs",
+      "J9s",
+      "T9s",
+      "98s",
+      "87s",
+      "76s",
+      "AKo",
+      "AQo",
+      "AJo",
+      "ATo",
+      "A9o",
+      "KQo",
+      "KJo",
+      "QJo",
+    ]),
+  },
+  {
+    position: "BB",
+    detail: "Defend",
+    hands: makeRange([
+      "AA",
+      "KK",
+      "QQ",
+      "JJ",
+      "TT",
+      "99",
+      "88",
+      "77",
+      "66",
+      "55",
+      "44",
+      "33",
+      "22",
+      "AKs",
+      "AQs",
+      "AJs",
+      "ATs",
+      "A9s",
+      "A8s",
+      "A7s",
+      "A6s",
+      "A5s",
+      "A4s",
+      "A3s",
+      "A2s",
+      "KQs",
+      "KJs",
+      "KTs",
+      "K9s",
+      "K8s",
+      "K7s",
+      "K6s",
+      "QJs",
+      "QTs",
+      "Q9s",
+      "Q8s",
+      "JTs",
+      "J9s",
+      "J8s",
+      "T9s",
+      "T8s",
+      "98s",
+      "97s",
+      "87s",
+      "86s",
+      "76s",
+      "65s",
+      "54s",
+      "AKo",
+      "AQo",
+      "AJo",
+      "ATo",
+      "A9o",
+      "A8o",
+      "KQo",
+      "KJo",
+      "KTo",
+      "QJo",
+      "QTo",
+      "JTo",
+      "T9o",
+    ]),
+  },
+]
+
 type CoachMessage = {
   gameId: string
   role: "hero" | "coach"
@@ -175,11 +434,12 @@ function App() {
               <CardContent className="grid gap-2 md:grid-cols-3">
                 {difficulties.map((option) => (
                   <button
-                    className={`w-full rounded-md border p-3 text-left transition ${
+                    className={cn(
+                      "w-full rounded-md border p-3 text-left transition",
                       difficulty === option.value
                         ? "border-primary bg-primary/8"
-                        : "border-border bg-card hover:bg-accent"
-                    }`}
+                        : "border-border bg-card hover:bg-accent",
+                    )}
                     key={option.value}
                     onClick={() => setDifficulty(option.value)}
                     type="button"
@@ -229,6 +489,8 @@ function App() {
               </CardContent>
             </Card>
           </aside>
+
+          <PreflopRanges />
 
           <section className="rounded-lg border border-border bg-card p-4">
             <div className="mb-4 flex items-center justify-between gap-3">
@@ -485,6 +747,85 @@ function App() {
       </div>
     </main>
   )
+}
+
+function PreflopRanges() {
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Preflop Ranges</h2>
+          <p className="text-sm text-muted-foreground">
+            Baseline 5-handed starter ranges for solid, balanced play.
+          </p>
+        </div>
+        <Badge variant="secondary">13 x 13</Badge>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        {preflopRanges.map((range) => (
+          <RangeMatrix key={range.position} range={range} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function RangeMatrix({ range }: { range: (typeof preflopRanges)[number] }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-background p-3">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold">{range.position}</div>
+          <div className="text-xs text-muted-foreground">{range.detail}</div>
+        </div>
+        <Badge variant="outline">{range.hands.size}</Badge>
+      </div>
+      <div className="grid grid-cols-[repeat(13,minmax(0,1fr))] gap-0.5">
+        {rangeRanks.flatMap((_, rowIndex) =>
+          rangeRanks.map((__, columnIndex) => {
+            const hand = rangeHandLabel(rowIndex, columnIndex)
+            const isIncluded = range.hands.has(hand)
+            const isPair = rowIndex === columnIndex
+
+            return (
+              <div
+                className={cn(
+                  "flex aspect-square min-h-0 min-w-0 items-center justify-center rounded-[3px] border text-[0.56rem] font-semibold leading-none",
+                  isIncluded
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-muted/35 text-muted-foreground/45",
+                  isPair && !isIncluded && "bg-muted/60 text-muted-foreground",
+                )}
+                key={`${range.position}-${hand}`}
+                title={`${range.position} ${hand}`}
+              >
+                {hand}
+              </div>
+            )
+          }),
+        )}
+      </div>
+    </div>
+  )
+}
+
+function makeRange(hands: string[]) {
+  return new Set(hands)
+}
+
+function rangeHandLabel(rowIndex: number, columnIndex: number) {
+  const rowRank = rangeRanks[rowIndex]
+  const columnRank = rangeRanks[columnIndex]
+
+  if (rowIndex === columnIndex) {
+    return `${rowRank}${columnRank}`
+  }
+
+  if (rowIndex < columnIndex) {
+    return `${rowRank}${columnRank}s`
+  }
+
+  return `${columnRank}${rowRank}o`
 }
 
 function actionLabel(action: LegalAction) {
