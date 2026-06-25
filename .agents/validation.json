@@ -1,0 +1,16 @@
+{
+  "schema": "repository_validation_contract.v1",
+  "environment": "local",
+  "setup": {
+    "command": "make install",
+    "requires_user_approval": true
+  },
+  "checks": {
+    "lint": "make lint",
+    "test": "make test"
+  },
+  "policy": {
+    "implementation_agents_may_run_checks": true,
+    "implementation_agents_may_run_setup": false
+  }
+}
