@@ -12,5 +12,39 @@
   "policy": {
     "implementation_agents_may_run_checks": true,
     "implementation_agents_may_run_setup": false
+  },
+  "visual_qa": {
+    "enabled": true,
+    "mode": "ephemeral_screenshots",
+    "app": {
+      "launch_command": "make dev HOST={host} FRONTEND_PORT={port}",
+      "base_url": "http://{host}:{port}",
+      "health_path": "/",
+      "reuse_existing": false,
+      "timeout_seconds": 90
+    },
+    "viewports": {
+      "desktop": {
+        "width": 1440,
+        "height": 950
+      },
+      "mobile": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "screens": [
+      {
+        "name": "poker home",
+        "path": "/",
+        "selector_ready": "#root",
+        "viewports": [
+          "desktop",
+          "mobile"
+        ],
+        "full_page": false,
+        "required": true
+      }
+    ]
   }
 }
